@@ -436,6 +436,14 @@ st.markdown("""
 
     /* ---- Dividers ---- */
     hr { border-color: rgba(255, 255, 255, 0.06) !important; }
+
+    /* ---- Hide Streamlit chrome completely ---- */
+    header[data-testid="stHeader"] { display: none !important; }
+    #MainMenu { display: none !important; }
+    footer { display: none !important; }
+    div[data-testid="stToolbar"] { display: none !important; }
+    div[data-testid="stDecoration"] { display: none !important; }
+    div[data-testid="stStatusWidget"] { display: none !important; }
 </style>
 """, unsafe_allow_html=True)
 
