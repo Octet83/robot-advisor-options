@@ -2970,7 +2970,16 @@ try:
 
 except ValueError as e:
     st.error(f"⚠️ **Erreur** : {e}")
-    st.info("💡 **Conseil** : Vérifiez le ticker, augmentez votre budget, ou réessayez pendant les heures de marché (9h30-16h00 ET).")
+    import zoneinfo as _zi
+    try:
+        _et = _zi.ZoneInfo("America/New_York")
+        _local_tz = dt.datetime.now().astimezone().tzinfo
+        _open_local = dt.datetime.now(_et).replace(hour=9, minute=30).astimezone(_local_tz)
+        _close_local = dt.datetime.now(_et).replace(hour=16, minute=0).astimezone(_local_tz)
+        _hours = f"{_open_local.strftime('%Hh%M')}-{_close_local.strftime('%Hh%M')} (heure locale)"
+    except Exception:
+        _hours = "9h30-16h00 ET"
+    st.info(f"💡 **Conseil** : Vérifiez le ticker, augmentez votre budget, ou réessayez pendant les heures de marché ({_hours}).")
 
 except Exception as e:
     st.error(f"❌ **Erreur inattendue** : {type(e).__name__} — {e}")
