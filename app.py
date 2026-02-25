@@ -2098,8 +2098,46 @@ with st.sidebar:
     )
 
     st.markdown("---")
-    analyze_btn = st.button("🔍  Analyser", use_container_width=True, type="primary")
-    scan_btn = st.button("🔎  Scanner Tous les Tickers", use_container_width=True)
+
+    # ── Détection horaires de marché US (NYSE) ──
+    import zoneinfo as _zi
+    _market_open = True
+    _market_hours_msg = ""
+    try:
+        _et = _zi.ZoneInfo("America/New_York")
+        _now_et = dt.datetime.now(_et)
+        _local_tz = dt.datetime.now().astimezone().tzinfo
+        _open_et = _now_et.replace(hour=9, minute=30, second=0, microsecond=0)
+        _close_et = _now_et.replace(hour=16, minute=0, second=0, microsecond=0)
+        _is_weekday = _now_et.weekday() < 5
+        _market_open = _is_weekday and _open_et <= _now_et <= _close_et
+
+        if not _market_open:
+            # Calcul de la prochaine ouverture en heure locale
+            _next_open_et = _open_et
+            if _now_et >= _close_et or not _is_weekday:
+                _days = 1
+                _nd = _now_et + dt.timedelta(days=_days)
+                while _nd.weekday() >= 5:
+                    _days += 1
+                    _nd = _now_et + dt.timedelta(days=_days)
+                _next_open_et = _nd.replace(hour=9, minute=30, second=0, microsecond=0)
+            _next_open_local = _next_open_et.astimezone(_local_tz)
+            _open_local = dt.datetime.now(_et).replace(hour=9, minute=30).astimezone(_local_tz)
+            _close_local = dt.datetime.now(_et).replace(hour=16, minute=0).astimezone(_local_tz)
+            _market_hours_msg = (
+                f"Le marché US (NYSE) est actuellement **fermé**.\n\n"
+                f"Heures d'ouverture : **{_open_local.strftime('%Hh%M')} – {_close_local.strftime('%Hh%M')}** (heure locale), du lundi au vendredi.\n\n"
+                f"🕐 Prochaine ouverture : **{_next_open_local.strftime('%A %d/%m à %Hh%M')}**"
+            )
+    except Exception:
+        _market_open = True  # en cas d'erreur, on laisse passer
+
+    if not _market_open:
+        st.warning("🔒 Marché fermé — analyse indisponible")
+
+    analyze_btn = st.button("🔍  Analyser", use_container_width=True, type="primary", disabled=not _market_open)
+    scan_btn = st.button("🔎  Scanner Tous les Tickers", use_container_width=True, disabled=not _market_open)
 
     st.markdown("---")
     st.caption("📊 Options Robo-Advisor v1.0")
@@ -2216,6 +2254,24 @@ if scan_btn:
     st.stop()
 
 if not analyze_btn:
+    # Bannière marché fermé
+    if not _market_open and _market_hours_msg:
+        st.markdown("""<div style="
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            border: 2px solid #e94560;
+            border-radius: 16px;
+            padding: 2.5rem;
+            text-align: center;
+            margin: 2rem 0;
+        ">
+            <div style="font-size: 3rem; margin-bottom: 0.5rem;">🔒</div>
+            <h2 style="color: #e94560; margin: 0 0 1rem 0;">Marché Fermé</h2>
+            <p style="color: #ccc; font-size: 1.1rem; line-height: 1.6;">""" + _market_hours_msg.replace('\n\n', '<br>').replace('**', '<b>', 1).replace('**', '</b>', 1).replace('**', '<b>', 1).replace('**', '</b>', 1).replace('**', '<b>', 1).replace('**', '</b>', 1) + """</p>
+            <p style="color: #888; font-size: 0.9rem; margin-top: 1.5rem;">Les données d'options (bid/ask) ne sont pas fiables en dehors des heures de séance.<br>
+            L'analyse est désactivée pour éviter des résultats incorrects.</p>
+        </div>""", unsafe_allow_html=True)
+        st.stop()
+
     # État initial : instructions
     st.markdown("---")
     col1, col2, col3 = st.columns(3)
