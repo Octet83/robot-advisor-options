@@ -17,7 +17,49 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 import yfinance as yf
-from scipy.stats import norm
+
+# ── Modules extraits ──
+from config import (
+    RISK_FREE_RATE, TICKER_GROUPS, TICKER_LIST, TICKER_NAMES,
+    TICKER_CATEGORY, VOL_INDEX_MAP, VOL_INDEX_NAMES,
+)
+from engine.black_scholes import (
+    black_scholes_delta, black_scholes_price, black_scholes_gamma,
+    black_scholes_theta, black_scholes_vega,
+    compute_leg_greeks, simulate_pnl, estimate_take_profit_spot,
+    compute_real_probabilities,
+)
+from engine.strategy import (
+    build_strategy, find_strike_by_delta, get_mid_price,
+    estimate_sigma, filter_liquid_options,
+)
+from engine.indicators import (
+    compute_iv_rank, compute_historical_vol, compute_trend_and_risk_data,
+)
+from data.hybrid_provider import HybridProvider
+from ui.styles import inject_css
+
+# ── Data provider singleton (IBKR → yfinance fallback) ──
+@st.cache_resource
+def _init_provider():
+    return HybridProvider()
+
+_provider = _init_provider()
+
+def get_spot_price(ticker: str) -> float:
+    return _provider.get_spot_price(ticker)
+
+def get_vol_index(ticker: str) -> tuple[float, str]:
+    return _provider.get_vol_index(ticker)
+
+def get_options_chain(ticker: str):
+    return _provider.get_options_chain(ticker)
+
+def get_leaps_chain(ticker: str):
+    return _provider.get_leaps_chain(ticker)
+
+def get_short_term_chain(ticker: str):
+    return _provider.get_short_term_chain(ticker)
 
 # ──────────────────────────────────────────────
 # 1. CONFIGURATION & THÈME
@@ -31,2034 +73,7 @@ st.set_page_config(
 )
 
 # CSS custom — thème glassmorphism financier premium
-st.markdown("""
-<style>
-    @import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Fira+Sans:wght@300;400;500;600;700&display=swap');
-
-    /* ---- Base ---- */
-    .stApp {
-        font-family: 'Fira Sans', sans-serif;
-        background-color: #0F172A;
-        color: #F8FAFC;
-    }
-    h1, h2, h3, h4, h5, h6 {
-        font-family: 'Fira Code', monospace !important;
-        color: #F8FAFC !important;
-    }
-    code, .stCode { font-family: 'Fira Code', monospace !important; }
-
-    /* ---- Global text contrast fixes ---- */
-    .stApp p, .stApp li, .stApp span, .stApp div { color: #E2E8F0; }
-    .stApp .stMarkdown p { color: #E2E8F0 !important; }
-    .stApp .stMarkdown h3 { color: #F8FAFC !important; }
-    .stApp label { color: #CBD5E1 !important; }
-    .stApp .stCaption, .stApp caption, [data-testid="stCaptionContainer"] { color: #94A3B8 !important; }
-
-    /* Sidebar text */
-    section[data-testid="stSidebar"] h2,
-    section[data-testid="stSidebar"] h3,
-    section[data-testid="stSidebar"] p,
-    section[data-testid="stSidebar"] span,
-    section[data-testid="stSidebar"] div { color: #E2E8F0; }
-    section[data-testid="stSidebar"] .stCaption,
-    section[data-testid="stSidebar"] caption { color: #94A3B8 !important; }
-
-    /* Alert boxes contrast */
-    .stAlert p, .stAlert span, .stAlert div { color: #F1F5F9 !important; }
-    [data-testid="stNotification"] p { color: #F1F5F9 !important; }
-    div[data-testid="stNotificationContentInfo"] p { color: #BFDBFE !important; }
-    div[data-testid="stNotificationContentWarning"] p { color: #FEF3C7 !important; }
-    div[data-testid="stNotificationContentSuccess"] p { color: #D1FAE5 !important; }
-    div[data-testid="stNotificationContentError"] p { color: #FEE2E2 !important; }
-
-    /* ---- Streamlit metric override ---- */
-    div[data-testid="stMetricDelta"] { color: #94A3B8 !important; }
-    div[data-testid="stMetricDelta"] svg { fill: currentColor !important; }
-
-    /* ---- SVG icon helper ---- */
-    .icon-inline {
-        display: inline-block;
-        vertical-align: middle;
-        width: 20px;
-        height: 20px;
-        margin-right: 6px;
-    }
-
-    /* ---- Header hero ---- */
-    .hero {
-        background: linear-gradient(135deg, #0F172A 0%, #1E293B 40%, #0F172A 100%);
-        border-radius: 16px;
-        padding: 2.5rem 3rem;
-        margin-bottom: 1.5rem;
-        border: 1px solid rgba(245, 158, 11, 0.15);
-        backdrop-filter: blur(12px);
-        -webkit-backdrop-filter: blur(12px);
-        position: relative;
-        overflow: hidden;
-    }
-    .hero::before {
-        content: '';
-        position: absolute;
-        top: -50%;
-        left: -20%;
-        width: 60%;
-        height: 200%;
-        background: radial-gradient(ellipse, rgba(139, 92, 246, 0.08) 0%, transparent 70%);
-        pointer-events: none;
-    }
-    .hero::after {
-        content: '';
-        position: absolute;
-        bottom: -50%;
-        right: -20%;
-        width: 60%;
-        height: 200%;
-        background: radial-gradient(ellipse, rgba(245, 158, 11, 0.06) 0%, transparent 70%);
-        pointer-events: none;
-    }
-    .hero h1 {
-        background: linear-gradient(90deg, #F59E0B, #FBBF24, #8B5CF6);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        font-size: 2.4rem;
-        font-weight: 700;
-        margin: 0;
-        letter-spacing: -0.02em;
-        position: relative;
-        z-index: 1;
-    }
-    .hero p {
-        color: #94A3B8;
-        margin: .5rem 0 0;
-        font-size: .95rem;
-        letter-spacing: 0.03em;
-        position: relative;
-        z-index: 1;
-    }
-
-    /* ---- Glass Card base ---- */
-    .glass-card {
-        background: rgba(30, 41, 59, 0.5);
-        backdrop-filter: blur(16px);
-        -webkit-backdrop-filter: blur(16px);
-        border: 1px solid rgba(255, 255, 255, 0.08);
-        border-radius: 14px;
-        padding: 1.5rem;
-        transition: border-color 0.2s ease, box-shadow 0.2s ease;
-    }
-    .glass-card:hover {
-        border-color: rgba(245, 158, 11, 0.2);
-        box-shadow: 0 4px 24px rgba(245, 158, 11, 0.05);
-    }
-
-    /* ---- Metric cards ---- */
-    div[data-testid="stMetric"] {
-        background: rgba(30, 41, 59, 0.5);
-        backdrop-filter: blur(16px);
-        -webkit-backdrop-filter: blur(16px);
-        border: 1px solid rgba(255, 255, 255, 0.08);
-        border-radius: 14px;
-        padding: 1.25rem 1.5rem;
-        transition: border-color 0.2s ease, box-shadow 0.2s ease;
-    }
-    div[data-testid="stMetric"]:hover {
-        border-color: rgba(245, 158, 11, 0.2);
-        box-shadow: 0 4px 24px rgba(245, 158, 11, 0.05);
-    }
-    div[data-testid="stMetric"] label {
-        color: #94A3B8 !important;
-        font-weight: 500;
-        font-family: 'Fira Sans', sans-serif !important;
-        font-size: 0.85rem !important;
-        letter-spacing: 0.03em;
-    }
-    div[data-testid="stMetric"] [data-testid="stMetricValue"] {
-        font-size: 1.7rem !important;
-        font-weight: 700;
-        font-family: 'Fira Code', monospace !important;
-    }
-
-    /* ---- Verdict card ---- */
-    .verdict-card {
-        background: rgba(30, 41, 59, 0.6);
-        backdrop-filter: blur(20px);
-        -webkit-backdrop-filter: blur(20px);
-        border: 1px solid rgba(139, 92, 246, 0.25);
-        border-radius: 16px;
-        padding: 2rem 2.5rem;
-        margin: 1.25rem 0;
-        position: relative;
-        overflow: hidden;
-    }
-    .verdict-card::before {
-        content: '';
-        position: absolute;
-        top: 0; left: 0; right: 0;
-        height: 3px;
-        background: linear-gradient(90deg, #F59E0B, #8B5CF6);
-        border-radius: 16px 16px 0 0;
-    }
-    .verdict-card h2 {
-        color: #8B5CF6;
-        margin: 0 0 .75rem;
-        font-size: 0.85rem;
-        text-transform: uppercase;
-        letter-spacing: 0.1em;
-        font-family: 'Fira Code', monospace;
-    }
-    .verdict-card .strategy-name {
-        font-size: 1.9rem;
-        font-weight: 700;
-        background: linear-gradient(90deg, #F59E0B, #FBBF24, #8B5CF6);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        margin: .25rem 0;
-        font-family: 'Fira Code', monospace;
-        letter-spacing: -0.02em;
-    }
-    .verdict-card p {
-        color: #CBD5E1;
-        line-height: 1.7;
-        margin: .75rem 0 0;
-        font-size: 0.95rem;
-    }
-
-    /* ---- Metrics grid ---- */
-    .fin-metric {
-        background: rgba(30, 41, 59, 0.5);
-        backdrop-filter: blur(16px);
-        -webkit-backdrop-filter: blur(16px);
-        border: 1px solid rgba(255, 255, 255, 0.08);
-        border-radius: 14px;
-        padding: 1.5rem;
-        text-align: center;
-        transition: border-color 0.2s ease, box-shadow 0.2s ease;
-    }
-    .fin-metric:hover {
-        border-color: rgba(245, 158, 11, 0.2);
-        box-shadow: 0 4px 24px rgba(245, 158, 11, 0.05);
-    }
-    .fin-metric .label {
-        color: #94A3B8;
-        font-size: .75rem;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-        font-family: 'Fira Sans', sans-serif;
-    }
-    .fin-metric .value {
-        font-size: 1.6rem;
-        font-weight: 700;
-        margin-top: .35rem;
-        font-family: 'Fira Code', monospace;
-    }
-    .fin-metric .green { color: #34D399; }
-    .fin-metric .red { color: #F87171; }
-    .fin-metric .blue { color: #60A5FA; }
-    .fin-metric .amber { color: #FBBF24; }
-
-    /* ---- Greeks card ---- */
-    .greeks-container {
-        display: grid;
-        grid-template-columns: repeat(5, 1fr);
-        gap: 12px;
-        margin: 1rem 0;
-    }
-    @media (max-width: 768px) {
-        .greeks-container { grid-template-columns: repeat(2, 1fr); }
-    }
-    .greek-card {
-        background: rgba(30, 41, 59, 0.5);
-        backdrop-filter: blur(16px);
-        -webkit-backdrop-filter: blur(16px);
-        border: 1px solid rgba(255, 255, 255, 0.06);
-        border-radius: 12px;
-        padding: 1.1rem 1rem;
-        text-align: center;
-        position: relative;
-        cursor: default;
-        transition: border-color 0.2s ease, box-shadow 0.2s ease;
-    }
-    .greek-card:hover {
-        border-color: rgba(139, 92, 246, 0.3);
-        box-shadow: 0 4px 20px rgba(139, 92, 246, 0.08);
-    }
-    .greek-card:hover .greek-hint {
-        opacity: 1;
-        transform: translateX(-50%) translateY(0);
-        pointer-events: auto;
-    }
-    .greek-symbol {
-        font-family: 'Fira Code', monospace;
-        font-size: 0.75rem;
-        font-weight: 600;
-        color: #8B5CF6;
-        text-transform: uppercase;
-        letter-spacing: 0.12em;
-        margin-bottom: .25rem;
-    }
-    .greek-value {
-        font-family: 'Fira Code', monospace;
-        font-size: 1.35rem;
-        font-weight: 700;
-        color: #F8FAFC;
-    }
-    .greek-hint {
-        position: absolute;
-        bottom: calc(100% + 8px);
-        left: 50%;
-        transform: translateX(-50%) translateY(4px);
-        background: rgba(15, 23, 42, 0.95);
-        backdrop-filter: blur(12px);
-        -webkit-backdrop-filter: blur(12px);
-        border: 1px solid rgba(139, 92, 246, 0.3);
-        border-radius: 10px;
-        padding: .75rem 1rem;
-        width: 240px;
-        opacity: 0;
-        pointer-events: none;
-        transition: opacity 0.2s ease, transform 0.2s ease;
-        z-index: 100;
-    }
-    .greek-hint::after {
-        content: '';
-        position: absolute;
-        top: 100%;
-        left: 50%;
-        transform: translateX(-50%);
-        border: 6px solid transparent;
-        border-top-color: rgba(139, 92, 246, 0.3);
-    }
-    .greek-hint-title {
-        font-family: 'Fira Code', monospace;
-        font-size: 0.7rem;
-        font-weight: 600;
-        color: #FBBF24;
-        text-transform: uppercase;
-        letter-spacing: 0.1em;
-        margin-bottom: .3rem;
-    }
-    .greek-hint-text {
-        font-family: 'Fira Sans', sans-serif;
-        font-size: 0.78rem;
-        color: #CBD5E1;
-        line-height: 1.5;
-    }
-
-    /* ---- Dataframe ---- */
-    .stDataFrame { border-radius: 14px; overflow: hidden; }
-
-    /* ---- Section headers ---- */
-    .section-header {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        margin-bottom: 1rem;
-    }
-    .section-header svg {
-        width: 22px;
-        height: 22px;
-        color: #F59E0B;
-        flex-shrink: 0;
-    }
-    .section-header h3 {
-        margin: 0;
-        font-size: 1.1rem;
-        font-weight: 600;
-        color: #F8FAFC;
-        letter-spacing: -0.01em;
-    }
-
-    /* ---- Sidebar ---- */
-    section[data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #0F172A 0%, #1E293B 100%);
-        border-right: 1px solid rgba(255, 255, 255, 0.06);
-    }
-    section[data-testid="stSidebar"] .stSelectbox label,
-    section[data-testid="stSidebar"] .stNumberInput label,
-    section[data-testid="stSidebar"] .stTextInput label {
-        color: #E2E8F0 !important;
-        font-weight: 500;
-        font-family: 'Fira Sans', sans-serif !important;
-    }
-
-    /* ---- Sidebar inputs: dark background + light text ---- */
-    section[data-testid="stSidebar"] [data-baseweb="select"],
-    section[data-testid="stSidebar"] [data-baseweb="select"] > div,
-    section[data-testid="stSidebar"] [data-baseweb="select"] [class*="control"],
-    section[data-testid="stSidebar"] [data-baseweb="select"] [class*="valueContainer"],
-    section[data-testid="stSidebar"] [data-baseweb="select"] [class*="placeholder"],
-    section[data-testid="stSidebar"] [data-baseweb="select"] [class*="singleValue"],
-    section[data-testid="stSidebar"] [data-baseweb="select"] [class*="Input"] {
-        background-color: #1E293B !important;
-        color: #E2E8F0 !important;
-    }
-    section[data-testid="stSidebar"] [data-baseweb="select"] div[role="combobox"],
-    section[data-testid="stSidebar"] [data-baseweb="select"] div[data-baseweb="select"] {
-        background-color: #1E293B !important;
-    }
-    section[data-testid="stSidebar"] [data-baseweb="select"] * {
-        color: #E2E8F0 !important;
-        border-color: rgba(255, 255, 255, 0.12) !important;
-    }
-    section[data-testid="stSidebar"] [data-baseweb="select"] svg {
-        fill: #94A3B8 !important;
-    }
-    /* Input fields (number, text) */
-    section[data-testid="stSidebar"] input {
-        background-color: #1E293B !important;
-        color: #E2E8F0 !important;
-        border: 1px solid rgba(255, 255, 255, 0.12) !important;
-    }
-    /* Number input wrapper */
-    section[data-testid="stSidebar"] [data-baseweb="input"],
-    section[data-testid="stSidebar"] [data-baseweb="input"] > div {
-        background-color: #1E293B !important;
-        border-color: rgba(255, 255, 255, 0.12) !important;
-    }
-    /* +/- buttons inside number input */
-    section[data-testid="stSidebar"] button[data-testid="stNumberInputStepUp"],
-    section[data-testid="stSidebar"] button[data-testid="stNumberInputStepDown"] {
-        color: #E2E8F0 !important;
-        border-color: rgba(255, 255, 255, 0.12) !important;
-    }
-    /* Secondary buttons (scanner) — dark bg with readable text */
-    section[data-testid="stSidebar"] button[kind="secondary"],
-    section[data-testid="stSidebar"] .stButton button:not([kind="primary"]) {
-        background-color: #1E293B !important;
-        color: #E2E8F0 !important;
-        border: 1px solid rgba(255, 255, 255, 0.15) !important;
-    }
-    section[data-testid="stSidebar"] .stButton button:not([kind="primary"]):hover {
-        background-color: #334155 !important;
-        border-color: rgba(245, 158, 11, 0.3) !important;
-    }
-
-    /* ---- Dividers ---- */
-    hr { border-color: rgba(255, 255, 255, 0.06) !important; }
-
-    /* ---- Hide Streamlit chrome completely ---- */
-    header[data-testid="stHeader"] { display: none !important; }
-    #MainMenu { display: none !important; }
-    footer { display: none !important; }
-    div[data-testid="stToolbar"] { display: none !important; }
-    div[data-testid="stDecoration"] { display: none !important; }
-    div[data-testid="stStatusWidget"] { display: none !important; }
-</style>
-""", unsafe_allow_html=True)
-
-
-# ──────────────────────────────────────────────
-# 2. CONSTANTES & TICKERS POPULAIRES
-# ──────────────────────────────────────────────
-
-TICKER_GROUPS = {
-    "🇺🇸 Index US": {
-        "SPY": "S&P 500", "QQQ": "Nasdaq 100", "IWM": "Russell 2000",
-        "DIA": "Dow Jones", "VTI": "US Total Market",
-        "RSP": "S&P 500 Equal Wt", "MDY": "S&P MidCap 400", "IJR": "S&P SmallCap 600",
-    },
-    "🌍 World": {
-        "VT": "FTSE All-World", "VXUS": "International ex-US",
-    },
-    "🇪🇺 Europe": {
-        "VGK": "FTSE Europe", "FEZ": "Euro Stoxx 50",
-        "EWG": "Germany (DAX)", "EWU": "UK (FTSE 100)", "EWQ": "France (CAC 40)",
-        "EWP": "Spain (IBEX)", "EWI": "Italy (FTSE MIB)", "EWL": "Switzerland (SMI)",
-        "EWN": "Netherlands (AEX)", "EWD": "Sweden (OMX)",
-    },
-    "🌏 Asie-Pacifique": {
-        "EWJ": "Japan (Nikkei)", "EWY": "South Korea (KOSPI)",
-        "EWA": "Australia (ASX)", "EWH": "Hong Kong (HSI)",
-        "EWT": "Taiwan (TAIEX)", "EWS": "Singapore (STI)",
-        "INDA": "India (NIFTY)", "FXI": "China Large-Cap", "AAXJ": "Asia ex-Japan",
-    },
-    "🌎 Amériques (ex-US)": {
-        "EWZ": "Brazil (Bovespa)", "EWC": "Canada (TSX)", "EWW": "Mexico (IPC)",
-    },
-    "🌐 Émergents": {
-        "EEM": "Emerging Markets", "KWEB": "China Internet",
-    },
-    "💻 Tech": {
-        "AAPL": "Apple", "MSFT": "Microsoft", "AMZN": "Amazon",
-        "GOOGL": "Alphabet", "META": "Meta", "NVDA": "NVIDIA", "TSLA": "Tesla",
-        "AVGO": "Broadcom", "ORCL": "Oracle", "CRM": "Salesforce",
-        "ADBE": "Adobe", "CSCO": "Cisco", "ACN": "Accenture", "IBM": "IBM",
-    },
-    "🔬 Semiconducteurs": {
-        "AMD": "AMD", "INTC": "Intel", "MU": "Micron", "QCOM": "Qualcomm",
-        "TSM": "TSMC", "MRVL": "Marvell", "ARM": "Arm Holdings", "SMCI": "Super Micro",
-    },
-    "🎬 Média": {
-        "NFLX": "Netflix", "DIS": "Disney", "CMCSA": "Comcast", "WBD": "Warner Bros",
-    },
-    "🏦 Finance": {
-        "JPM": "JPMorgan", "BAC": "Bank of America", "GS": "Goldman Sachs",
-        "MS": "Morgan Stanley", "WFC": "Wells Fargo", "C": "Citigroup", "SCHW": "Schwab",
-        "V": "Visa", "MA": "Mastercard", "AXP": "Amex", "BLK": "BlackRock", "COF": "Capital One",
-    },
-    "⛽ Énergie": {
-        "XOM": "ExxonMobil", "CVX": "Chevron", "COP": "ConocoPhillips",
-        "SLB": "Schlumberger", "OXY": "Occidental", "EOG": "EOG Resources",
-    },
-    "🏥 Santé / Pharma": {
-        "UNH": "UnitedHealth", "JNJ": "Johnson & Johnson", "PFE": "Pfizer",
-        "ABBV": "AbbVie", "LLY": "Eli Lilly", "MRK": "Merck", "BMY": "Bristol-Myers",
-        "AMGN": "Amgen", "GILD": "Gilead", "TMO": "Thermo Fisher",
-        "ABT": "Abbott", "MDT": "Medtronic", "MRNA": "Moderna",
-    },
-    "🏭 Industrie": {
-        "BA": "Boeing", "CAT": "Caterpillar", "DE": "Deere & Co",
-        "GE": "GE Aerospace", "HON": "Honeywell", "LMT": "Lockheed Martin",
-        "RTX": "RTX / Raytheon", "UPS": "UPS", "FDX": "FedEx", "UNP": "Union Pacific",
-    },
-    "🛒 Consommation": {
-        "HD": "Home Depot", "WMT": "Walmart", "COST": "Costco",
-        "TGT": "Target", "NKE": "Nike", "SBUX": "Starbucks", "MCD": "McDonald's",
-        "KO": "Coca-Cola", "PEP": "PepsiCo", "PG": "Procter & Gamble",
-        "LOW": "Lowe's", "BKNG": "Booking",
-    },
-    "📡 Télécom": {
-        "T": "AT&T", "VZ": "Verizon", "TMUS": "T-Mobile",
-    },
-    "🚗 Auto & EV": {
-        "F": "Ford", "GM": "General Motors", "LCID": "Lucid",
-    },
-    "🎰 Spéculatif / High-Vol": {
-        "COIN": "Coinbase", "PLTR": "Palantir", "SOFI": "SoFi", "RIVN": "Rivian",
-        "NIO": "NIO", "MARA": "Marathon Digital", "HOOD": "Robinhood",
-        "SNAP": "Snap", "GME": "GameStop", "AMC": "AMC Entertainment",
-        "UBER": "Uber", "LYFT": "Lyft", "SHOP": "Shopify", "ROKU": "Roku",
-        "RBLX": "Roblox", "DKNG": "DraftKings", "ABNB": "Airbnb",
-        "PYPL": "PayPal", "SNOW": "Snowflake", "NET": "Cloudflare",
-        "CRWD": "CrowdStrike", "PANW": "Palo Alto Networks", "ZS": "Zscaler",
-    },
-    "🪙 Matières Premières": {
-        "GLD": "Or (Gold)", "SLV": "Argent (Silver)", "PPLT": "Platine",
-        "PALL": "Palladium", "USO": "Pétrole brut (WTI)", "UNG": "Gaz naturel",
-        "CPER": "Cuivre", "COPX": "Mines de cuivre", "LIT": "Lithium",
-        "URA": "Uranium", "DBA": "Agriculture",
-    },
-    "📈 Obligations": {
-        "TLT": "Treasuries 20 ans+", "HYG": "Obligations High Yield",
-    },
-    "📊 Secteurs ETF": {
-        "XLF": "Secteur Finance", "XLE": "Secteur Énergie", "XLK": "Secteur Tech",
-        "XLV": "Secteur Santé", "XLI": "Secteur Industrie",
-        "XLP": "Conso. de base", "XLY": "Conso. discrétionnaire",
-        "XLU": "Secteur Utilities", "XLRE": "Secteur Immobilier",
-        "XLC": "Secteur Communication", "SMH": "Semiconducteurs ETF",
-        "ARKK": "ARK Innovation", "SOXX": "Semiconducteurs (iShares)",
-        "XBI": "Biotech ETF",
-    },
-}
-
-# ── Lookup tables construits à partir des groupes ──
-TICKER_LIST = []
-TICKER_NAMES = {}
-TICKER_CATEGORY = {}
-for _cat, _tickers in TICKER_GROUPS.items():
-    for _t, _name in _tickers.items():
-        TICKER_LIST.append(_t)
-        TICKER_NAMES[_t] = _name
-        TICKER_CATEGORY[_t] = _cat
-
-RISK_FREE_RATE = 0.05  # ~taux sans risque approximatif
-
-# ── Mapping ticker → indice de volatilité CBOE spécifique ──
-# Fallback : ^VIX si le ticker n'a pas d'indice dédié.
-VOL_INDEX_MAP = {
-    # S&P 500
-    "SPY": "^VIX", "VOO": "^VIX", "IVV": "^VIX", "RSP": "^VIX",
-    # Nasdaq 100
-    "QQQ": "^VXN", "TQQQ": "^VXN", "SQQQ": "^VXN",
-    # Dow Jones
-    "DIA": "^VXD",
-    # Pétrole / Énergie
-    "USO": "^OVX", "XOM": "^OVX", "CVX": "^OVX", "COP": "^OVX",
-    "SLB": "^OVX", "OXY": "^OVX", "EOG": "^OVX", "XLE": "^OVX",
-    # Or
-    "GLD": "^GVZ",
-    # Argent
-    "SLV": "^VXSLV",
-    # Emerging Markets
-    "EEM": "^VXEEM", "VWO": "^VXEEM", "IEMG": "^VXEEM",
-    # Brésil
-    "EWZ": "^VXEWZ",
-    # Chine
-    "FXI": "^VXFXI", "MCHI": "^VXFXI", "KWEB": "^VXFXI",
-    # Europe / EAFE
-    "VGK": "^VXEFA", "FEZ": "^VXEFA", "EWG": "^VXEFA", "EWU": "^VXEFA",
-    "EWQ": "^VXEFA", "EWP": "^VXEFA", "EWI": "^VXEFA", "EWL": "^VXEFA",
-    "EWN": "^VXEFA", "EWD": "^VXEFA", "VXUS": "^VXEFA",
-    # Actions individuelles avec vol CBOE dédiée
-    "AAPL": "^VXAPL",
-    "AMZN": "^VXAZN",
-    "GOOGL": "^VXGOG", "GOOG": "^VXGOG",
-    "GS": "^VXGS",
-    "IBM": "^VXIBM",
-}
-
-# Noms lisibles des indices de volatilité
-VOL_INDEX_NAMES = {
-    "^VIX": "VIX (S&P 500)",
-    "^VXN": "VXN (Nasdaq)",
-    "^VXD": "VXD (Dow Jones)",
-    "^OVX": "OVX (Pétrole)",
-    "^GVZ": "GVZ (Or)",
-    "^VXSLV": "VXSLV (Argent)",
-    "^VXEEM": "VXEEM (Émergents)",
-    "^VXEWZ": "VXEWZ (Brésil)",
-    "^VXFXI": "VXFXI (Chine)",
-    "^VXEFA": "VXEFA (Europe)",
-    "^VXAPL": "VXAPL (Apple)",
-    "^VXAZN": "VXAZN (Amazon)",
-    "^VXGOG": "VXGOG (Google)",
-    "^VXGS": "VXGS (Goldman)",
-    "^VXIBM": "VXIBM (IBM)",
-}
-
-
-# ──────────────────────────────────────────────
-# 3. FONCTIONS BACKEND — MOTEUR DE DONNÉES
-# ──────────────────────────────────────────────
-
-@st.cache_data(ttl=300)
-def get_spot_price(ticker: str) -> float:
-    """Récupère le prix actuel (Spot) du ticker."""
-    tk = yf.Ticker(ticker)
-    hist = tk.history(period="1d")
-    if hist.empty:
-        raise ValueError(f"Aucune donnée trouvée pour le ticker « {ticker} ».")
-    return float(hist["Close"].iloc[-1])
-
-
-@st.cache_data(ttl=300)
-def get_vol_index(ticker: str) -> tuple[float, str]:
-    """
-    Récupère l'indice de volatilité le plus adapté au ticker.
-    Retourne (valeur, symbole_de_l_indice).
-    Fallback vers ^VIX si l'indice spécifique n'est pas disponible.
-    """
-    vol_symbol = VOL_INDEX_MAP.get(ticker, "^VIX")
-
-    # Essai avec l'indice spécifique
-    tk = yf.Ticker(vol_symbol)
-    hist = tk.history(period="5d")
-    if not hist.empty:
-        return float(hist["Close"].iloc[-1]), vol_symbol
-
-    # Fallback vers VIX si l'indice spécifique échoue
-    if vol_symbol != "^VIX":
-        tk = yf.Ticker("^VIX")
-        hist = tk.history(period="5d")
-        if not hist.empty:
-            return float(hist["Close"].iloc[-1]), "^VIX"
-
-    raise ValueError("Impossible de récupérer l'indice de volatilité. Le marché est peut-être fermé.")
-
-
-@st.cache_data(ttl=600)
-def compute_iv_rank(ticker: str) -> float:
-    """
-    Calcule l'IV Rank sur 252 jours.
-    Utilise la volatilité historique (écart-type annualisé des rendements)
-    comme proxy de l'IV si l'API ne fournit pas l'IV directement.
-    """
-    tk = yf.Ticker(ticker)
-    hist = tk.history(period="1y")
-    if len(hist) < 30:
-        raise ValueError(f"Historique insuffisant pour « {ticker} » (min 30 jours requis).")
-
-    # Calcule la volatilité historique glissante sur 20 jours
-    log_returns = np.log(hist["Close"] / hist["Close"].shift(1)).dropna()
-    rolling_vol = log_returns.rolling(window=20).std() * np.sqrt(252) * 100  # annualisée en %
-    rolling_vol = rolling_vol.dropna()
-
-    if rolling_vol.empty:
-        return 50.0  # valeur par défaut si calcul impossible
-
-    iv_current = rolling_vol.iloc[-1]
-    iv_min = rolling_vol.min()
-    iv_max = rolling_vol.max()
-
-    if iv_max == iv_min:
-        return 50.0
-
-    iv_rank = 100.0 * (iv_current - iv_min) / (iv_max - iv_min)
-    return round(float(np.clip(iv_rank, 0, 100)), 1)
-
-
-@st.cache_data(ttl=600)
-def compute_historical_vol(ticker: str) -> float | None:
-    """
-    Calcule la volatilité historique réalisée (annualisée) sur 30 jours.
-    Retourne None si données insuffisantes.
-    """
-    tk = yf.Ticker(ticker)
-    hist = tk.history(period="3mo")
-    if len(hist) < 30:
-        return None
-    log_returns = np.log(hist["Close"] / hist["Close"].shift(1)).dropna()
-    sigma_hist = float(log_returns.tail(30).std() * np.sqrt(252))
-    return sigma_hist if sigma_hist > 0 else None
-
-
-def black_scholes_delta(S: float, K: float, T: float, r: float,
-                        sigma: float, option_type: str) -> float:
-    """
-    Calcule le Delta d'une option via le modèle de Black-Scholes.
-    S = spot, K = strike, T = temps en années, r = taux sans risque,
-    sigma = volatilité (décimale), option_type = 'call' ou 'put'.
-    """
-    if T <= 0 or sigma <= 0:
-        return 0.0
-    d1 = (np.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
-    if option_type == "call":
-        return float(norm.cdf(d1))
-    else:
-        return float(norm.cdf(d1) - 1)
-
-
-def black_scholes_price(S: float, K: float, T: float, r: float,
-                        sigma: float, option_type: str) -> float:
-    """Prix théorique Black-Scholes d'une option européenne."""
-    if T <= 0 or sigma <= 0:
-        return max(0, (S - K) if option_type == "call" else (K - S))
-    d1 = (np.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
-    d2 = d1 - sigma * np.sqrt(T)
-    if option_type == "call":
-        return float(S * norm.cdf(d1) - K * np.exp(-r * T) * norm.cdf(d2))
-    else:
-        return float(K * np.exp(-r * T) * norm.cdf(-d2) - S * norm.cdf(-d1))
-
-
-def black_scholes_gamma(S: float, K: float, T: float, r: float, sigma: float) -> float:
-    """Gamma : taux de variation du Delta par rapport au sous-jacent."""
-    if T <= 0 or sigma <= 0:
-        return 0.0
-    d1 = (np.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
-    return float(norm.pdf(d1) / (S * sigma * np.sqrt(T)))
-
-
-def black_scholes_theta(S: float, K: float, T: float, r: float,
-                        sigma: float, option_type: str) -> float:
-    """Theta : déclin temporel journalier (en $/jour pour 1 action)."""
-    if T <= 0 or sigma <= 0:
-        return 0.0
-    d1 = (np.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
-    d2 = d1 - sigma * np.sqrt(T)
-    common = -(S * norm.pdf(d1) * sigma) / (2 * np.sqrt(T))
-    if option_type == "call":
-        theta = common - r * K * np.exp(-r * T) * norm.cdf(d2)
-    else:
-        theta = common + r * K * np.exp(-r * T) * norm.cdf(-d2)
-    return float(theta / 365)  # par jour
-
-
-def black_scholes_vega(S: float, K: float, T: float, r: float, sigma: float) -> float:
-    """Vega : sensibilité à la volatilité (pour 1% de changement d'IV)."""
-    if T <= 0 or sigma <= 0:
-        return 0.0
-    d1 = (np.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
-    return float(S * norm.pdf(d1) * np.sqrt(T) / 100)  # pour 1%
-
-
-def compute_leg_greeks(leg: dict, S: float, T: float, sigma: float) -> dict:
-    """Calcule Delta, Gamma, Theta, Vega et IV pour un leg de la stratégie."""
-    K = leg["strike"]
-    opt_type = leg["type"].lower()
-    sign = 1 if leg["action"] == "BUY" else -1
-
-    delta = black_scholes_delta(S, K, T, RISK_FREE_RATE, sigma, opt_type) * sign
-    gamma = black_scholes_gamma(S, K, T, RISK_FREE_RATE, sigma) * sign
-    theta = black_scholes_theta(S, K, T, RISK_FREE_RATE, sigma, opt_type) * sign
-    vega = black_scholes_vega(S, K, T, RISK_FREE_RATE, sigma) * sign
-
-    return {
-        "delta": round(delta, 4),
-        "gamma": round(gamma, 4),
-        "theta": round(theta, 4),
-        "vega": round(vega, 4),
-        "iv": round(sigma * 100, 1),
-    }
-
-
-def simulate_pnl(legs: list, target_spot: float, days_to_target: int,
-                 current_sigma: float, qty: int) -> float:
-    """
-    Simule le P&L théorique de la position à un prix cible et une date cible.
-    Utilise Black-Scholes pour recalculer le prix de chaque leg.
-    Retourne le P&L en $ (positif = profit, négatif = perte).
-    """
-    T_target = max(days_to_target, 1) / 365.0
-
-    # Valeur initiale nette (coût d'ouverture)
-    initial_value = 0.0
-    for leg in legs:
-        sign = 1 if leg["action"] == "BUY" else -1
-        initial_value += sign * leg["price"]
-
-    # Nouvelle valeur théorique au target_spot et T_target
-    new_value = 0.0
-    for leg in legs:
-        opt_type = leg["type"].lower()
-        K = leg["strike"]
-        sign = 1 if leg["action"] == "BUY" else -1
-        new_price = black_scholes_price(target_spot, K, T_target,
-                                        RISK_FREE_RATE, current_sigma, opt_type)
-        new_value += sign * new_price
-
-    pnl = (new_value - initial_value) * 100 * qty
-    return round(pnl, 2)
-
-
-def estimate_take_profit_spot(legs: list, spot: float, days_to_target: int,
-                              current_sigma: float, qty: int,
-                              take_profit_pnl: float) -> float | None:
-    """
-    Estime le prix du sous-jacent nécessaire pour atteindre le Take Profit.
-    Utilise une recherche par balayage puis affinage (bisection).
-    Retourne le prix spot estimé ou None si introuvable.
-    """
-    # Chercher dans les deux directions (hausse et baisse)
-    best_spot = None
-    best_diff = float("inf")
-
-    # Balayage large : de -20% à +20% par pas de 0.1%
-    for pct in range(-200, 201):
-        test_spot = spot * (1 + pct / 1000.0)
-        pnl = simulate_pnl(legs, test_spot, days_to_target, current_sigma, qty)
-        diff = abs(pnl - take_profit_pnl)
-        if diff < best_diff:
-            best_diff = diff
-            best_spot = test_spot
-
-    # Affinage par bisection autour du meilleur candidat
-    if best_spot is not None:
-        lo = best_spot * 0.995
-        hi = best_spot * 1.005
-        for _ in range(30):
-            mid = (lo + hi) / 2
-            pnl_mid = simulate_pnl(legs, mid, days_to_target, current_sigma, qty)
-            if pnl_mid < take_profit_pnl:
-                # Besoin d'un spot qui rapproche du profit
-                pnl_lo = simulate_pnl(legs, lo, days_to_target, current_sigma, qty)
-                if pnl_lo < pnl_mid:
-                    lo = mid
-                else:
-                    hi = mid
-            else:
-                hi = mid
-        # Vérifier que le résultat est raisonnable (dans ±20%)
-        final_spot = (lo + hi) / 2
-        final_pnl = simulate_pnl(legs, final_spot, days_to_target, current_sigma, qty)
-        if abs(final_pnl - take_profit_pnl) < take_profit_pnl * 0.1 and abs(final_spot - spot) / spot < 0.25:
-            return round(final_spot, 2)
-
-    return None
-
-
-def compute_real_probabilities(legs: list, spot: float, dte: int,
-                                sigma: float, qty: int,
-                                take_profit: float, max_risk: float,
-                                sigma_move: float | None = None) -> dict:
-    """
-    Calcule les probabilités réelles via intégration numérique sur la
-    distribution log-normale (GBM), en évaluant le P&L au **time-stop**
-    (21 jours avant l'expiration) via Black-Scholes.
-
-    Méthode :
-      1. Le sous-jacent évolue pendant `holding_days = dte - 21` jours,
-         avec `sigma_move` (vol. historique réalisée).
-      2. Le P&L est évalué avec les prix BS à 21 DTE restants,
-         en utilisant `sigma` (vol. implicite de la chaîne).
-      3. Intégration sur 500 points z ∈ [-4σ, +4σ].
-
-    Retourne :
-      - p_take_profit : P(P&L ≥ take_profit) au time-stop
-      - p_breakeven   : P(P&L ≥ 0) au time-stop
-      - p_max_loss    : P(P&L ≤ -95% du max_risk) au time-stop
-      - expected_pnl  : EV = ∫ P&L(S_T) × f(S_T) dS_T
-    """
-    if sigma_move is None:
-        sigma_move = sigma  # fallback: même vol pour mouvement et pricing
-
-    holding_days = max(1, dte - 21)
-    remaining_dte = min(21, dte)
-    T_holding = holding_days / 365.0
-
-    # Paramètres GBM : mouvement du sous-jacent avec vol historique
-    drift = (RISK_FREE_RATE - 0.5 * sigma_move**2) * T_holding
-    vol = sigma_move * np.sqrt(T_holding)
-
-    # Intégration numérique : 500 points sur [-4σ, +4σ] (99.99%)
-    n_points = 500
-    z_values = np.linspace(-4, 4, n_points)
-    dz = z_values[1] - z_values[0]
-
-    p_take_profit = 0.0
-    p_breakeven = 0.0
-    p_max_loss = 0.0
-    expected_pnl = 0.0  # EV = ∫ P&L(S_T) × f(S_T) dS_T
-
-    for z in z_values:
-        s_t = spot * np.exp(drift + vol * z)
-        prob = norm.pdf(z) * dz
-        # P&L évalué avec sigma (IV) pour le pricing BS des options
-        pnl = simulate_pnl(legs, s_t, remaining_dte, sigma, qty)
-
-        expected_pnl += pnl * prob
-        if pnl >= take_profit:
-            p_take_profit += prob
-        if pnl >= 0:
-            p_breakeven += prob
-        if pnl <= -max_risk * 0.95:
-            p_max_loss += prob
-
-    p_tp_pct = round(max(0.1, min(99.9, p_take_profit * 100)), 1)
-    p_be_pct = round(max(0.1, min(99.9, p_breakeven * 100)), 1)
-    p_ml_pct = round(max(0.1, min(99.9, p_max_loss * 100)), 1)
-    p_partial_loss_pct = round(max(0.0, 100.0 - p_be_pct - p_ml_pct), 1)
-
-    return {
-        "p_take_profit": p_tp_pct,
-        "p_breakeven": p_be_pct,
-        "p_partial_loss": p_partial_loss_pct,
-        "p_max_loss": p_ml_pct,
-        "expected_pnl": round(expected_pnl, 2),
-    }
-
-
-@st.cache_data(ttl=300)
-def get_options_chain(ticker: str):
-    """
-    Récupère la chaîne d'options et filtre l'expiration la plus proche
-    de 45 DTE (fourchette 35-60 jours).
-    Retourne (expiration_date_str, calls_df, puts_df, dte).
-    """
-    tk = yf.Ticker(ticker)
-    expirations = tk.options
-    if not expirations:
-        raise ValueError(f"Aucune chaîne d'options disponible pour « {ticker} ».")
-
-    today = dt.date.today()
-    best_exp = None
-    best_dte = None
-    best_diff = float("inf")
-
-    for exp_str in expirations:
-        exp_date = dt.datetime.strptime(exp_str, "%Y-%m-%d").date()
-        dte = (exp_date - today).days
-        diff = abs(dte - 45)
-        if 35 <= dte <= 60 and diff < best_diff:
-            best_diff = diff
-            best_exp = exp_str
-            best_dte = dte
-
-    # Si rien dans [35,60], prend l'expiration la plus proche de 45 DTE
-    if best_exp is None:
-        for exp_str in expirations:
-            exp_date = dt.datetime.strptime(exp_str, "%Y-%m-%d").date()
-            dte = (exp_date - today).days
-            if dte > 0:
-                diff = abs(dte - 45)
-                if diff < best_diff:
-                    best_diff = diff
-                    best_exp = exp_str
-                    best_dte = dte
-
-    if best_exp is None:
-        raise ValueError("Aucune expiration d'options valide trouvée.")
-
-    chain = tk.option_chain(best_exp)
-    return best_exp, chain.calls, chain.puts, best_dte
-
-
-def get_leaps_chain(ticker: str):
-    """
-    Récupère la chaîne d'options LEAPS (> 200 DTE) pour les stratégies
-    d'achat de temps (PMCC).
-    Retourne (expiration_date_str, calls_df, puts_df, dte) ou None.
-    """
-    tk = yf.Ticker(ticker)
-    expirations = tk.options
-    today = dt.date.today()
-    best_exp = None
-    best_dte = None
-    best_diff = float("inf")
-
-    for exp_str in expirations:
-        exp_date = dt.datetime.strptime(exp_str, "%Y-%m-%d").date()
-        dte = (exp_date - today).days
-        if dte > 200:
-            diff = abs(dte - 365)  # cible ~1 an
-            if diff < best_diff:
-                best_diff = diff
-                best_exp = exp_str
-                best_dte = dte
-
-    if best_exp is None:
-        return None
-
-    chain = tk.option_chain(best_exp)
-    return best_exp, chain.calls, chain.puts, best_dte
-
-
-def get_short_term_chain(ticker: str):
-    """
-    Récupère la chaîne d'options court terme (~20 DTE)
-    pour les Calendar Spreads.
-    """
-    tk = yf.Ticker(ticker)
-    expirations = tk.options
-    today = dt.date.today()
-    best_exp = None
-    best_dte = None
-    best_diff = float("inf")
-
-    for exp_str in expirations:
-        exp_date = dt.datetime.strptime(exp_str, "%Y-%m-%d").date()
-        dte = (exp_date - today).days
-        if dte > 5:
-            diff = abs(dte - 20)
-            if diff < best_diff:
-                best_diff = diff
-                best_exp = exp_str
-                best_dte = dte
-
-    if best_exp is None:
-        return None
-
-    chain = tk.option_chain(best_exp)
-    return best_exp, chain.calls, chain.puts, best_dte
-
-
-# ──────────────────────────────────────────────
-# 4. FONCTIONS HELPERS — SÉLECTION DE STRIKES
-# ──────────────────────────────────────────────
-
-def find_strike_by_delta(options_df: pd.DataFrame, S: float, T: float,
-                         sigma: float, target_delta: float,
-                         option_type: str) -> pd.Series | None:
-    """
-    Trouve le strike dont le Delta est le plus proche de target_delta.
-    Retourne la ligne du DataFrame correspondante.
-    """
-    if options_df.empty:
-        return None
-
-    deltas = []
-    for _, row in options_df.iterrows():
-        K = float(row["strike"])
-        d = black_scholes_delta(S, K, T, RISK_FREE_RATE, sigma, option_type)
-        deltas.append(abs(d))
-
-    options_df = options_df.copy()
-    options_df["abs_delta"] = deltas
-
-    target_abs = abs(target_delta)
-    idx = (options_df["abs_delta"] - target_abs).abs().idxmin()
-    return options_df.loc[idx]
-
-
-def get_mid_price(row: pd.Series) -> float:
-    """
-    Retourne le prix moyen (bid+ask)/2.
-    RISK MANAGER : si le carnet d'ordres est vide (bid=0 ou ask=0),
-    le contrat est considéré comme illiquide/mort → prix 0.
-    """
-    bid = row.get("bid", 0) or 0
-    ask = row.get("ask", 0) or 0
-    if bid <= 0 or ask <= 0:
-        return 0.0
-    return round((bid + ask) / 2, 2)
-
-
-def estimate_sigma(options_df: pd.DataFrame, S: float) -> float:
-    """
-    Estime la volatilité implicite moyenne à partir des IV de la chaîne.
-    Fallback à 0.25 si indisponible.
-    """
-    if "impliedVolatility" in options_df.columns:
-        ivs = options_df["impliedVolatility"].dropna()
-        ivs = ivs[ivs > 0]
-        if not ivs.empty:
-            return float(ivs.median())
-    return 0.25
-
-
-# ──────────────────────────────────────────────
-# 5. MOTEUR DE STRATÉGIE — MATRICE DE DÉCISION
-# ──────────────────────────────────────────────
-
-def filter_liquid_options(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Filtre les options illiquides de la chaîne.
-    Exclut :
-      - bid == 0 (pas de marché réel)
-      - openInterest < 10 (pas de participation)
-      - spread bid/ask > 40% du mid-price (illiquidité excessive)
-    """
-    if df.empty:
-        return df
-    filtered = df.copy()
-    # Exclure bid == 0
-    filtered = filtered[filtered["bid"] > 0]
-    # Exclure open interest trop faible
-    if "openInterest" in filtered.columns:
-        filtered = filtered[filtered["openInterest"] >= 10]
-    # Exclure spread bid/ask excessif
-    mid = (filtered["bid"] + filtered["ask"]) / 2
-    spread_pct = (filtered["ask"] - filtered["bid"]) / mid
-    filtered = filtered[spread_pct <= 0.40]
-    return filtered.reset_index(drop=True)
-
-
-def build_strategy(spot: float, vix: float, iv_rank: float, bias: str,
-                   budget: float, ticker: str, vol_symbol: str = "^VIX"):
-    """
-    Moteur principal. Sélectionne et construit la stratégie optimale.
-    Retourne un dict avec : name, explanation, legs, metrics, exit_plan.
-    """
-
-    # --- Récupération de la chaîne d'options ~45 DTE ---
-    exp_str, calls, puts, dte = get_options_chain(ticker)
-
-    # --- RISK MANAGER : Filtre de liquidité ---
-    calls = filter_liquid_options(calls)
-    puts = filter_liquid_options(puts)
-    if len(calls) < 3 or len(puts) < 3:
-        # Détection horaires de marché US (NYSE : 9h30-16h00 ET)
-        import zoneinfo
-        now_local = dt.datetime.now().astimezone()
-        try:
-            now_et = dt.datetime.now(zoneinfo.ZoneInfo("America/New_York"))
-        except Exception:
-            now_et = now_local  # fallback
-        market_open_et = now_et.replace(hour=9, minute=30, second=0, microsecond=0)
-        market_close_et = now_et.replace(hour=16, minute=0, second=0, microsecond=0)
-        is_weekday = now_et.weekday() < 5
-        is_market_open = is_weekday and market_open_et <= now_et <= market_close_et
-
-        market_hint = ""
-        if not is_market_open:
-            # Calcul de la prochaine ouverture en heure locale
-            next_open_et = market_open_et
-            if now_et >= market_close_et or not is_weekday:
-                # Avancer au prochain jour ouvré
-                days_ahead = 1
-                next_day = now_et + dt.timedelta(days=days_ahead)
-                while next_day.weekday() >= 5:  # skip weekend
-                    days_ahead += 1
-                    next_day = now_et + dt.timedelta(days=days_ahead)
-                next_open_et = next_day.replace(hour=9, minute=30, second=0, microsecond=0)
-            # Convertir en heure locale
-            next_open_local = next_open_et.astimezone(now_local.tzinfo)
-            market_hint = (
-                f" ⏰ Le marché US (NYSE) est actuellement fermé. "
-                f"Les données bid/ask sont indisponibles hors séance. "
-                f"Prochaine ouverture : {next_open_local.strftime('%d/%m à %Hh%M')} (heure locale)."
-            )
-
-        raise ValueError(
-            f"Options trop illiquides sur « {ticker} ». "
-            f"Après filtrage (bid>0, OI≥10, spread≤40%), "
-            f"il ne reste que {len(puts)} puts et {len(calls)} calls. "
-            f"Minimum requis : 3 de chaque côté."
-            f"{market_hint}"
-        )
-
-    # --- RISK MANAGER : Filtre Anti-Penny Stocks ---
-    if spot < 10.0:
-        raise ValueError(
-            f"Le prix de l'action ({spot:.2f}\\$) est trop bas. "
-            f"Les options sur les Penny Stocks offrent un ratio risque/gain désastreux. "
-            f"Analyse rejetée par le Risk Manager."
-        )
-
-    T = dte / 365.0
-    sigma = estimate_sigma(pd.concat([calls, puts]), spot)
-
-    result = {
-        "name": "",
-        "explanation": "",
-        "legs": [],
-        "credit_or_debit": 0.0,
-        "max_risk": 0.0,
-        "max_profit": 0.0,
-        "pop": 0.0,
-        "exit_plan": {},
-        "expiration": exp_str,
-        "dte": dte,
-    }
-
-    # =============================================
-    # CAS A : Volatilité Élevée — VENTE DE PRIME
-    # =============================================
-    if iv_rank > 50 or vix > 20:
-
-        if bias == "Neutre":
-            # ---- Iron Condor ----
-            result["name"] = "🦅 Iron Condor"
-            result["explanation"] = (
-                "La volatilité implicite est élevée (IV Rank {:.0f}%, {} {:.1f}), "
-                "ce qui gonfle artificiellement les primes d'options. "
-                "L'Iron Condor vend cette prime excessive des deux côtés du marché, "
-                "capturant le retour statistique à la moyenne de la volatilité."
-            ).format(iv_rank, VOL_INDEX_NAMES.get(vol_symbol, "VIX"), vix)
-
-            # Vente Call/Put à ~0.16 Delta
-            sell_put = find_strike_by_delta(puts, spot, T, sigma, -0.16, "put")
-            sell_call = find_strike_by_delta(calls, spot, T, sigma, 0.16, "call")
-
-            if sell_put is None or sell_call is None:
-                raise ValueError("Impossible de trouver les strikes appropriés dans la chaîne d'options.")
-
-            sell_put_strike = float(sell_put["strike"])
-            sell_call_strike = float(sell_call["strike"])
-
-            # --- SYMÉTRIE DES STRIKES ---
-            # Forcer une distance OTM égale des deux côtés du spot
-            dist_put = spot - sell_put_strike   # distance put (positive)
-            dist_call = sell_call_strike - spot  # distance call (positive)
-            sym_dist = min(dist_put, dist_call)  # prendre la + petite
-
-            # Recalculer les strikes symétriques
-            sym_put_target = spot - sym_dist
-            sym_call_target = spot + sym_dist
-
-            # Snapper sur les strikes disponibles les + proches
-            put_strikes_all = sorted(puts["strike"].unique())
-            call_strikes_all = sorted(calls["strike"].unique())
-
-            sell_put_candidates = [s for s in put_strikes_all if s < spot]
-            sell_call_candidates = [s for s in call_strikes_all if s > spot]
-
-            if sell_put_candidates and sell_call_candidates:
-                sell_put_strike = min(sell_put_candidates, key=lambda x: abs(x - sym_put_target))
-                sell_call_strike = min(sell_call_candidates, key=lambda x: abs(x - sym_call_target))
-                # Mettre à jour les rows pour les prix
-                sell_put_row = puts[puts["strike"] == sell_put_strike]
-                sell_call_row = calls[calls["strike"] == sell_call_strike]
-                if not sell_put_row.empty:
-                    sell_put = sell_put_row.iloc[0]
-                if not sell_call_row.empty:
-                    sell_call = sell_call_row.iloc[0]
-
-            # Largeur standardisée (~1.5% du spot, min 5$)
-            target_width = max(1.0, round(spot * 0.015))
-            put_strikes = sorted(puts["strike"].unique())
-            call_strikes = sorted(calls["strike"].unique())
-
-            # Protection put : strike le + proche de sell_put - target_width
-            buy_put_target = sell_put_strike - target_width
-            candidates_put = [s for s in put_strikes if s < sell_put_strike]
-            if not candidates_put:
-                raise ValueError("Pas de strikes de protection disponibles pour le Put side de l'Iron Condor.")
-            buy_put_strike = min(candidates_put, key=lambda x: abs(x - buy_put_target))
-
-            # Protection call : strike le + proche de sell_call + target_width
-            buy_call_target = sell_call_strike + target_width
-            candidates_call = [s for s in call_strikes if s > sell_call_strike]
-            if not candidates_call:
-                raise ValueError("Pas de strikes de protection disponibles pour le Call side de l'Iron Condor.")
-            buy_call_strike = min(candidates_call, key=lambda x: abs(x - buy_call_target))
-
-            sell_put_price = get_mid_price(sell_put)
-            sell_call_price = get_mid_price(sell_call)
-
-            buy_put_row = puts[puts["strike"] == buy_put_strike]
-            buy_call_row = calls[calls["strike"] == buy_call_strike]
-            buy_put_price = get_mid_price(buy_put_row.iloc[0]) if not buy_put_row.empty else 0.0
-            buy_call_price = get_mid_price(buy_call_row.iloc[0]) if not buy_call_row.empty else 0.0
-
-            net_credit = (sell_put_price + sell_call_price) - (buy_put_price + buy_call_price)
-            put_width = sell_put_strike - buy_put_strike
-            call_width = buy_call_strike - sell_call_strike
-            max_width = max(put_width, call_width)
-
-            # RISK MANAGER : Sanity check crédit — prix physiquement cohérents
-            if net_credit <= 0 or net_credit >= max_width:
-                raise ValueError(
-                    "Les prix de la chaîne d'options sont illogiques "
-                    "(illiquidité majeure ou bid/ask cassé). "
-                    "Analyse annulée pour votre sécurité."
-                )
-
-            max_risk = (max_width * 100) - (net_credit * 100)
-
-            if max_risk > budget:
-                raise ValueError(
-                    f"Budget insuffisant ({budget}\$) pour un Iron Condor standard sur {ticker}. "
-                    f"Risque par contrat : {max_risk:.0f}\$."
-                )
-
-            result["legs"] = [
-                {"action": "SELL", "type": "Put", "strike": sell_put_strike,
-                 "exp": exp_str, "dte": dte, "price": sell_put_price},
-                {"action": "BUY", "type": "Put", "strike": buy_put_strike,
-                 "exp": exp_str, "dte": dte, "price": buy_put_price},
-                {"action": "SELL", "type": "Call", "strike": sell_call_strike,
-                 "exp": exp_str, "dte": dte, "price": sell_call_price},
-                {"action": "BUY", "type": "Call", "strike": buy_call_strike,
-                 "exp": exp_str, "dte": dte, "price": buy_call_price},
-            ]
-            max_profit = net_credit * 100
-            result["credit_or_debit"] = round(max_profit, 2)
-            result["max_risk"] = round(max_risk, 2)
-            result["max_profit"] = round(max_profit, 2)
-
-
-        elif bias == "Haussier":
-            # ---- Bull Put Spread ----
-            result["name"] = "🐂 Bull Put Spread"
-            result["explanation"] = (
-                "La volatilité élevée (IV Rank {:.0f}%) offre des primes gonflées sur les puts. "
-                "Ce spread haussier vend un put OTM et achète une protection, profitant du biais "
-                "directionnel tout en collectant une prime statistiquement avantageuse."
-            ).format(iv_rank)
-
-            sell_put = find_strike_by_delta(puts, spot, T, sigma, -0.20, "put")
-            if sell_put is None:
-                raise ValueError("Impossible de trouver le strike approprié.")
-            sell_put_strike = float(sell_put["strike"])
-            sell_put_price = get_mid_price(sell_put)
-
-            # Largeur standardisée (~1.5% du spot, min 5$)
-            target_width = max(1.0, round(spot * 0.015))
-            put_strikes = sorted([s for s in puts["strike"].unique() if s < sell_put_strike])
-            if not put_strikes:
-                raise ValueError("Pas de strikes de protection disponibles pour le Bull Put Spread.")
-
-            buy_put_target = sell_put_strike - target_width
-            buy_put_strike = min(put_strikes, key=lambda x: abs(x - buy_put_target))
-            buy_put_row = puts[puts["strike"] == buy_put_strike]
-            buy_put_price = get_mid_price(buy_put_row.iloc[0]) if not buy_put_row.empty else 0.0
-
-            net_credit = sell_put_price - buy_put_price
-            width = sell_put_strike - buy_put_strike
-
-            # RISK MANAGER : Sanity check crédit — prix physiquement cohérents
-            if net_credit <= 0 or net_credit >= width:
-                raise ValueError(
-                    "Les prix de la chaîne d'options sont illogiques "
-                    "(illiquidité majeure ou bid/ask cassé). "
-                    "Analyse annulée pour votre sécurité."
-                )
-
-            max_profit = net_credit * 100
-            max_risk = (width * 100) - max_profit
-
-            if max_risk > budget:
-                raise ValueError(
-                    f"Budget insuffisant ({budget}\$) pour un Bull Put Spread standard sur {ticker}. "
-                    f"Risque par contrat : {max_risk:.0f}\$."
-                )
-
-            result["legs"] = [
-                {"action": "SELL", "type": "Put", "strike": sell_put_strike,
-                 "exp": exp_str, "dte": dte, "price": sell_put_price},
-                {"action": "BUY", "type": "Put", "strike": buy_put_strike,
-                 "exp": exp_str, "dte": dte, "price": buy_put_price},
-            ]
-            result["credit_or_debit"] = round(max_profit, 2)
-            result["max_risk"] = round(max_risk, 2)
-            result["max_profit"] = round(max_profit, 2)
-
-
-        else:  # Baissier
-            # ---- Bear Call Spread ----
-            result["name"] = "🐻 Bear Call Spread"
-            result["explanation"] = (
-                "La volatilité élevée (IV Rank {:.0f}%) rend les calls OTM anormalement chers. "
-                "Ce spread baissier vend cette prime excessive tout en limitant le risque "
-                "grâce à la protection supérieure."
-            ).format(iv_rank)
-
-            sell_call = find_strike_by_delta(calls, spot, T, sigma, 0.20, "call")
-            if sell_call is None:
-                raise ValueError("Impossible de trouver le strike approprié.")
-            sell_call_strike = float(sell_call["strike"])
-            sell_call_price = get_mid_price(sell_call)
-
-            # Largeur standardisée (~1.5% du spot, min 5$)
-            target_width = max(1.0, round(spot * 0.015))
-            call_strikes = sorted([s for s in calls["strike"].unique() if s > sell_call_strike])
-            if not call_strikes:
-                raise ValueError("Pas de strikes de protection disponibles pour le Bear Call Spread.")
-
-            buy_call_target = sell_call_strike + target_width
-            buy_call_strike = min(call_strikes, key=lambda x: abs(x - buy_call_target))
-            buy_call_row = calls[calls["strike"] == buy_call_strike]
-            buy_call_price = get_mid_price(buy_call_row.iloc[0]) if not buy_call_row.empty else 0.0
-
-            net_credit = sell_call_price - buy_call_price
-            width = buy_call_strike - sell_call_strike
-
-            # RISK MANAGER : Sanity check crédit — prix physiquement cohérents
-            if net_credit <= 0 or net_credit >= width:
-                raise ValueError(
-                    "Les prix de la chaîne d'options sont illogiques "
-                    "(illiquidité majeure ou bid/ask cassé). "
-                    "Analyse annulée pour votre sécurité."
-                )
-
-            max_profit = net_credit * 100
-            max_risk = (width * 100) - max_profit
-
-            if max_risk > budget:
-                raise ValueError(
-                    f"Budget insuffisant ({budget}\$) pour un Bear Call Spread standard sur {ticker}. "
-                    f"Risque par contrat : {max_risk:.0f}\$."
-                )
-
-            result["legs"] = [
-                {"action": "SELL", "type": "Call", "strike": sell_call_strike,
-                 "exp": exp_str, "dte": dte, "price": sell_call_price},
-                {"action": "BUY", "type": "Call", "strike": buy_call_strike,
-                 "exp": exp_str, "dte": dte, "price": buy_call_price},
-            ]
-            result["credit_or_debit"] = round(max_profit, 2)
-            result["max_risk"] = round(max_risk, 2)
-            result["max_profit"] = round(max_profit, 2)
-
-
-    # =============================================
-    # CAS B : Volatilité Faible — ACHAT DE TEMPS
-    # =============================================
-    elif iv_rank < 20 and vix < 15:
-
-        if bias == "Haussier":
-            # ---- PMCC (Poor Man's Covered Call) ----
-            result["name"] = "📈 PMCC (Diagonal Spread)"
-            result["explanation"] = (
-                "La volatilité est historiquement basse (IV Rank {:.0f}%, {} {:.1f}). "
-                "Le PMCC reproduit une covered call à moindre coût : achat d'un LEAPS deep ITM "
-                "et vente d'un call court terme pour générer du revenu récurrent."
-            ).format(iv_rank, VOL_INDEX_NAMES.get(vol_symbol, "VIX"), vix)
-
-            leaps = get_leaps_chain(ticker)
-            if leaps is None:
-                raise ValueError("Pas d'options LEAPS disponibles (>200 DTE) pour le PMCC.")
-            leaps_exp, leaps_calls, _, leaps_dte = leaps
-
-            sigma_leaps = estimate_sigma(leaps_calls, spot)
-            leaps_T = leaps_dte / 365.0
-
-            # Achat LEAPS deep ITM (Delta > 0.80)
-            buy_call = find_strike_by_delta(leaps_calls, spot, leaps_T, sigma_leaps, 0.80, "call")
-            if buy_call is None:
-                raise ValueError("Impossible de trouver un LEAPS approprié.")
-            buy_call_strike = float(buy_call["strike"])
-            buy_call_price = get_mid_price(buy_call)
-
-            # Vente Call court terme (~0.30 delta)
-            sell_call = find_strike_by_delta(calls, spot, T, sigma, 0.30, "call")
-            if sell_call is None:
-                raise ValueError("Impossible de trouver le call court terme.")
-            sell_call_strike = float(sell_call["strike"])
-            sell_call_price = get_mid_price(sell_call)
-
-            net_debit = buy_call_price - sell_call_price
-
-            # RISK MANAGER : Sanity check débit — la jambe achetée doit coûter plus
-            if net_debit <= 0:
-                raise ValueError(
-                    "Les prix de la chaîne d'options sont illogiques "
-                    "(illiquidité majeure ou bid/ask cassé). "
-                    "Analyse annulée pour votre sécurité."
-                )
-
-            max_risk = net_debit * 100
-
-            if max_risk > budget:
-                raise ValueError(
-                    f"Budget insuffisant ({budget}\$) pour le PMCC. "
-                    f"Débit net estimé : {max_risk:.0f}\$."
-                )
-
-            max_profit = (sell_call_strike - buy_call_strike - net_debit) * 100
-
-            result["legs"] = [
-                {"action": "BUY", "type": "Call", "strike": buy_call_strike,
-                 "exp": leaps_exp, "dte": leaps_dte, "price": buy_call_price},
-                {"action": "SELL", "type": "Call", "strike": sell_call_strike,
-                 "exp": exp_str, "dte": dte, "price": sell_call_price},
-            ]
-            result["credit_or_debit"] = round(-net_debit * 100, 2)
-            result["max_risk"] = round(max_risk, 2)
-            result["max_profit"] = round(max(max_profit, 0), 2)
-
-
-        elif bias == "Neutre":
-            # ---- Calendar Spread ----
-            result["name"] = "📅 Calendar Spread"
-            result["explanation"] = (
-                "Volatilité basse (IV Rank {:.0f}%). Le Calendar Spread profite de l'accélération "
-                "du déclin temporel (Theta) sur la jambe courte vendue, tout en conservant la "
-                "valeur de la jambe longue achetée."
-            ).format(iv_rank)
-
-            short_chain = get_short_term_chain(ticker)
-            if short_chain is None:
-                raise ValueError("Pas d'expiration court terme disponible pour le Calendar Spread.")
-            short_exp, short_calls, _, short_dte = short_chain
-
-            # Strike ATM
-            atm_strike = min(calls["strike"], key=lambda x: abs(x - spot))
-
-            # Vente court (~20 DTE)
-            short_row = short_calls[short_calls["strike"] == atm_strike]
-            if short_row.empty:
-                short_row = short_calls.iloc[(short_calls["strike"] - atm_strike).abs().argsort()[:1]]
-                atm_strike = float(short_row["strike"].iloc[0])
-            sell_price = get_mid_price(short_row.iloc[0])
-
-            # Achat long (~45-60 DTE)
-            long_row = calls[calls["strike"] == atm_strike]
-            if long_row.empty:
-                long_row = calls.iloc[(calls["strike"] - atm_strike).abs().argsort()[:1]]
-            buy_price = get_mid_price(long_row.iloc[0])
-
-            net_debit = buy_price - sell_price
-
-            # RISK MANAGER : Sanity check débit — la jambe achetée doit coûter plus
-            if net_debit <= 0:
-                raise ValueError(
-                    "Les prix de la chaîne d'options sont illogiques "
-                    "(illiquidité majeure ou bid/ask cassé). "
-                    "Analyse annulée pour votre sécurité."
-                )
-
-            max_risk = net_debit * 100
-
-            if max_risk > budget:
-                raise ValueError(
-                    f"Budget insuffisant ({budget}\$) pour le Calendar Spread. "
-                    f"Débit net estimé : {max_risk:.0f}\$."
-                )
-
-            result["legs"] = [
-                {"action": "BUY", "type": "Call", "strike": atm_strike,
-                 "exp": exp_str, "dte": dte, "price": buy_price},
-                {"action": "SELL", "type": "Call", "strike": atm_strike,
-                 "exp": short_exp, "dte": short_dte, "price": sell_price},
-            ]
-            result["credit_or_debit"] = round(-net_debit * 100, 2)
-            result["max_risk"] = round(max_risk, 2)
-            result["max_profit"] = round(max_risk * 0.5, 2)  # estimation
-
-
-        else:  # Baissier en basse vol
-            # Fallback vers un Bear Put Spread (débit)
-            result["name"] = "🐻 Bear Put Spread (Débit)"
-            result["explanation"] = (
-                "Volatilité basse avec biais baissier. Un Bear Put Spread en débit permet "
-                "de profiter d'une baisse tout en limitant le risque au débit payé."
-            )
-
-            buy_put = find_strike_by_delta(puts, spot, T, sigma, -0.45, "put")
-            if buy_put is None:
-                raise ValueError("Impossible de construire le Bear Put Spread.")
-            buy_put_strike = float(buy_put["strike"])
-            buy_put_price = get_mid_price(buy_put)
-
-            # Largeur standardisée (~1.5% du spot, min 5$)
-            target_width = max(1.0, round(spot * 0.015))
-            put_strikes = sorted([s for s in puts["strike"].unique() if s < buy_put_strike])
-            if not put_strikes:
-                raise ValueError("Pas de strikes de protection disponibles pour le Bear Put Spread.")
-
-            sell_put_target = buy_put_strike - target_width
-            sell_put_strike = min(put_strikes, key=lambda x: abs(x - sell_put_target))
-            sell_put_row = puts[puts["strike"] == sell_put_strike]
-            sell_put_price = get_mid_price(sell_put_row.iloc[0]) if not sell_put_row.empty else 0.0
-
-            net_debit = buy_put_price - sell_put_price
-            width = buy_put_strike - sell_put_strike
-
-            # RISK MANAGER : Sanity check débit — prix physiquement cohérents
-            if net_debit <= 0 or net_debit >= width:
-                raise ValueError(
-                    "Les prix de la chaîne d'options sont illogiques "
-                    "(illiquidité majeure ou bid/ask cassé). "
-                    "Analyse annulée pour votre sécurité."
-                )
-
-            max_risk = net_debit * 100
-            max_profit = (width * 100) - max_risk
-
-            if max_risk > budget:
-                raise ValueError(
-                    f"Budget insuffisant ({budget}\$) pour un Bear Put Spread standard sur {ticker}. "
-                    f"Risque par contrat : {max_risk:.0f}\$."
-                )
-
-            result["legs"] = [
-                {"action": "BUY", "type": "Put", "strike": buy_put_strike,
-                 "exp": exp_str, "dte": dte, "price": buy_put_price},
-                {"action": "SELL", "type": "Put", "strike": sell_put_strike,
-                 "exp": exp_str, "dte": dte, "price": sell_put_price},
-            ]
-            result["credit_or_debit"] = round(-max_risk, 2)
-            result["max_risk"] = round(max_risk, 2)
-            result["max_profit"] = round(max_profit, 2)
-
-
-    # =============================================
-    # CAS C : Volatilité Moyenne — CLASSIQUE / WHEEL
-    # =============================================
-    else:
-        can_wheel = budget >= spot * 100
-
-        if can_wheel and bias != "Baissier":
-            # ---- Cash Secured Put (The Wheel) ----
-            result["name"] = "🎡 Cash Secured Put (The Wheel)"
-            result["explanation"] = (
-                "Volatilité moyenne (IV Rank {:.0f}%). Votre budget ({:,.0f}$) couvre l'achat de "
-                "100 actions. La stratégie Wheel vend un put sécurisé par cash : soit vous collectez "
-                "la prime, soit vous achetez l'action à un prix réduit."
-            ).format(iv_rank, budget)
-
-            sell_put = find_strike_by_delta(puts, spot, T, sigma, -0.25, "put")
-            if sell_put is None:
-                raise ValueError("Impossible de trouver le strike approprié.")
-            sell_put_strike = float(sell_put["strike"])
-            sell_put_price = get_mid_price(sell_put)
-
-            max_risk = (sell_put_strike * 100) - (sell_put_price * 100)
-            if max_risk > budget:
-                # Baisser le strike
-                lower_puts = puts[puts["strike"] * 100 - sell_put_price * 100 <= budget]
-                if lower_puts.empty:
-                    raise ValueError(f"Budget insuffisant ({budget}\$) pour un Cash Secured Put sur {ticker}.")
-                sell_put = lower_puts.iloc[(lower_puts["strike"] - (budget / 100)).abs().argsort()[:1]].iloc[0]
-                sell_put_strike = float(sell_put["strike"])
-                sell_put_price = get_mid_price(sell_put)
-                max_risk = (sell_put_strike * 100) - (sell_put_price * 100)
-
-            result["legs"] = [
-                {"action": "SELL", "type": "Put", "strike": sell_put_strike,
-                 "exp": exp_str, "dte": dte, "price": sell_put_price},
-            ]
-            result["credit_or_debit"] = round(sell_put_price * 100, 2)
-            result["max_risk"] = round(max_risk, 2)
-            result["max_profit"] = round(sell_put_price * 100, 2)
-
-
-        else:
-            # ---- Spread Directionnel Classique ----
-            if bias == "Haussier":
-                result["name"] = "📊 Bull Call Spread"
-                result["explanation"] = (
-                    "Volatilité moyenne (IV Rank {:.0f}%). Un spread d'achat haussier en débit "
-                    "offre un profil risque/rendement défini avec un biais long."
-                ).format(iv_rank)
-
-                buy_call = find_strike_by_delta(calls, spot, T, sigma, 0.50, "call")
-                if buy_call is None:
-                    raise ValueError("Impossible de construire le Bull Call Spread.")
-                buy_call_strike = float(buy_call["strike"])
-                buy_call_price = get_mid_price(buy_call)
-
-                # Largeur standardisée (~1.5% du spot, min 5$)
-                target_width = max(1.0, round(spot * 0.015))
-                call_strikes = sorted([s for s in calls["strike"].unique() if s > buy_call_strike])
-                if not call_strikes:
-                    raise ValueError("Pas de strikes de protection disponibles pour le Bull Call Spread.")
-
-                sell_call_target = buy_call_strike + target_width
-                sell_call_strike = min(call_strikes, key=lambda x: abs(x - sell_call_target))
-                sell_call_row = calls[calls["strike"] == sell_call_strike]
-                sell_call_price = get_mid_price(sell_call_row.iloc[0]) if not sell_call_row.empty else 0.0
-
-                net_debit = buy_call_price - sell_call_price
-                width = sell_call_strike - buy_call_strike
-
-                # RISK MANAGER : Sanity check débit — prix physiquement cohérents
-                if net_debit <= 0 or net_debit >= width:
-                    raise ValueError(
-                        "Les prix de la chaîne d'options sont illogiques "
-                        "(illiquidité majeure ou bid/ask cassé). "
-                        "Analyse annulée pour votre sécurité."
-                    )
-
-                max_risk = net_debit * 100
-                max_profit = (width * 100) - max_risk
-
-                if max_risk > budget:
-                    raise ValueError(
-                        f"Budget insuffisant ({budget}\$) pour un Bull Call Spread standard sur {ticker}. "
-                        f"Risque par contrat : {max_risk:.0f}\$."
-                    )
-
-                result["legs"] = [
-                    {"action": "BUY", "type": "Call", "strike": buy_call_strike,
-                     "exp": exp_str, "dte": dte, "price": buy_call_price},
-                    {"action": "SELL", "type": "Call", "strike": sell_call_strike,
-                     "exp": exp_str, "dte": dte, "price": sell_call_price},
-                ]
-                result["credit_or_debit"] = round(-max_risk, 2)
-                result["max_risk"] = round(max_risk, 2)
-                result["max_profit"] = round(max_profit, 2)
-
-
-            elif bias == "Baissier":
-                # ---- Bear Put Spread ----
-                result["name"] = "📊 Bear Put Spread"
-                result["explanation"] = (
-                    "Volatilité moyenne (IV Rank {:.0f}%). Un spread baissier en débit "
-                    "profite de la baisse anticipée tout en définissant un risque maximal strict."
-                ).format(iv_rank)
-
-                buy_put = find_strike_by_delta(puts, spot, T, sigma, -0.50, "put")
-                if buy_put is None:
-                    raise ValueError("Impossible de construire le Bear Put Spread.")
-                buy_put_strike = float(buy_put["strike"])
-                buy_put_price = get_mid_price(buy_put)
-
-                # Largeur standardisée (~1.5% du spot, min 1$)
-                target_width = max(1.0, round(spot * 0.015))
-                put_strikes = sorted([s for s in puts["strike"].unique() if s < buy_put_strike])
-                if not put_strikes:
-                    raise ValueError("Pas de strikes de protection disponibles pour le Bear Put Spread.")
-
-                sell_put_target = buy_put_strike - target_width
-                sell_put_strike = min(put_strikes, key=lambda x: abs(x - sell_put_target))
-                sell_put_row = puts[puts["strike"] == sell_put_strike]
-                sell_put_price = get_mid_price(sell_put_row.iloc[0]) if not sell_put_row.empty else 0.0
-
-                net_debit = buy_put_price - sell_put_price
-                width = buy_put_strike - sell_put_strike
-
-                # RISK MANAGER : Sanity check débit — prix physiquement cohérents
-                if net_debit <= 0 or net_debit >= width:
-                    raise ValueError(
-                        "Les prix de la chaîne d'options sont illogiques "
-                        "(illiquidité majeure ou bid/ask cassé). "
-                        "Analyse annulée pour votre sécurité."
-                    )
-
-                max_risk = net_debit * 100
-                max_profit = (width * 100) - max_risk
-
-                if max_risk > budget:
-                    raise ValueError(
-                        f"Budget insuffisant ({budget}\$) pour un Bear Put Spread standard sur {ticker}. "
-                        f"Risque par contrat : {max_risk:.0f}\$."
-                    )
-
-                result["legs"] = [
-                    {"action": "BUY", "type": "Put", "strike": buy_put_strike,
-                     "exp": exp_str, "dte": dte, "price": buy_put_price},
-                    {"action": "SELL", "type": "Put", "strike": sell_put_strike,
-                     "exp": exp_str, "dte": dte, "price": sell_put_price},
-                ]
-                result["credit_or_debit"] = round(-max_risk, 2)
-                result["max_risk"] = round(max_risk, 2)
-                result["max_profit"] = round(max_profit, 2)
-
-
-            else:  # Neutre sans budget Wheel
-                # ---- Iron Condor (Volatilité Moyenne, Neutre) ----
-                result["name"] = "🦅 Iron Condor"
-                result["explanation"] = (
-                    "Volatilité moyenne et biais neutre. L'Iron Condor encaisse l'érosion "
-                    "du temps des deux côtés en pariant sur une stagnation du prix dans un "
-                    "canal défini. Le crédit collecté est le profit maximum si le sous-jacent "
-                    "reste entre les strikes vendus à l'expiration."
-                )
-
-                # Vente Call/Put à ~0.16 Delta
-                sell_put = find_strike_by_delta(puts, spot, T, sigma, -0.16, "put")
-                sell_call = find_strike_by_delta(calls, spot, T, sigma, 0.16, "call")
-
-                if sell_put is None or sell_call is None:
-                    raise ValueError("Impossible de trouver les strikes appropriés pour l'Iron Condor.")
-
-                sell_put_strike = float(sell_put["strike"])
-                sell_call_strike = float(sell_call["strike"])
-
-                # --- SYMÉTRIE DES STRIKES ---
-                dist_put = spot - sell_put_strike
-                dist_call = sell_call_strike - spot
-                sym_dist = min(dist_put, dist_call)
-
-                sym_put_target = spot - sym_dist
-                sym_call_target = spot + sym_dist
-
-                put_strikes_all = sorted(puts["strike"].unique())
-                call_strikes_all = sorted(calls["strike"].unique())
-                sell_put_candidates = [s for s in put_strikes_all if s < spot]
-                sell_call_candidates = [s for s in call_strikes_all if s > spot]
-
-                if sell_put_candidates and sell_call_candidates:
-                    sell_put_strike = min(sell_put_candidates, key=lambda x: abs(x - sym_put_target))
-                    sell_call_strike = min(sell_call_candidates, key=lambda x: abs(x - sym_call_target))
-                    sell_put_row = puts[puts["strike"] == sell_put_strike]
-                    sell_call_row = calls[calls["strike"] == sell_call_strike]
-                    if not sell_put_row.empty:
-                        sell_put = sell_put_row.iloc[0]
-                    if not sell_call_row.empty:
-                        sell_call = sell_call_row.iloc[0]
-
-                # Largeur standardisée (~1.5% du spot, min 1$)
-                target_width = max(1.0, round(spot * 0.015))
-                put_strikes = sorted(puts["strike"].unique())
-                call_strikes = sorted(calls["strike"].unique())
-
-                # Protection put : strike le + proche de sell_put - target_width
-                buy_put_target = sell_put_strike - target_width
-                candidates_put = [s for s in put_strikes if s < sell_put_strike]
-                if not candidates_put:
-                    raise ValueError("Pas de strikes de protection disponibles pour le Put side de l'Iron Condor.")
-                buy_put_strike = min(candidates_put, key=lambda x: abs(x - buy_put_target))
-
-                # Protection call : strike le + proche de sell_call + target_width
-                buy_call_target = sell_call_strike + target_width
-                candidates_call = [s for s in call_strikes if s > sell_call_strike]
-                if not candidates_call:
-                    raise ValueError("Pas de strikes de protection disponibles pour le Call side de l'Iron Condor.")
-                buy_call_strike = min(candidates_call, key=lambda x: abs(x - buy_call_target))
-
-                sell_put_price = get_mid_price(sell_put)
-                sell_call_price = get_mid_price(sell_call)
-
-                buy_put_row = puts[puts["strike"] == buy_put_strike]
-                buy_call_row = calls[calls["strike"] == buy_call_strike]
-                buy_put_price = get_mid_price(buy_put_row.iloc[0]) if not buy_put_row.empty else 0.0
-                buy_call_price = get_mid_price(buy_call_row.iloc[0]) if not buy_call_row.empty else 0.0
-
-                net_credit = (sell_put_price + sell_call_price) - (buy_put_price + buy_call_price)
-                put_width = sell_put_strike - buy_put_strike
-                call_width = buy_call_strike - sell_call_strike
-                max_width = max(put_width, call_width)
-
-                # RISK MANAGER : Sanity check crédit — prix physiquement cohérents
-                if net_credit <= 0 or net_credit >= max_width:
-                    raise ValueError(
-                        "Les prix de la chaîne d'options sont illogiques "
-                        "(illiquidité majeure ou bid/ask cassé). "
-                        "Analyse annulée pour votre sécurité."
-                    )
-
-                max_risk = (max_width * 100) - (net_credit * 100)
-
-                if max_risk > budget:
-                    raise ValueError(
-                        f"Budget insuffisant ({budget}\$) pour un Iron Condor standard sur {ticker}. "
-                        f"Risque par contrat : {max_risk:.0f}\$."
-                    )
-
-                result["legs"] = [
-                    {"action": "SELL", "type": "Put", "strike": sell_put_strike,
-                     "exp": exp_str, "dte": dte, "price": sell_put_price},
-                    {"action": "BUY", "type": "Put", "strike": buy_put_strike,
-                     "exp": exp_str, "dte": dte, "price": buy_put_price},
-                    {"action": "SELL", "type": "Call", "strike": sell_call_strike,
-                     "exp": exp_str, "dte": dte, "price": sell_call_price},
-                    {"action": "BUY", "type": "Call", "strike": buy_call_strike,
-                     "exp": exp_str, "dte": dte, "price": buy_call_price},
-                ]
-                max_profit = net_credit * 100
-                result["credit_or_debit"] = round(max_profit, 2)
-                result["max_risk"] = round(max_risk, 2)
-                result["max_profit"] = round(max_profit, 2)
-
-
-    # --- Plan de vol (exit triggers) ---
-    exp_date = dt.datetime.strptime(exp_str, "%Y-%m-%d").date()
-    time_stop_date = exp_date - dt.timedelta(days=21)
-    take_profit_amount = round(abs(result["max_profit"]) * 0.5, 2)
-
-    result["exit_plan"] = {
-        "take_profit": take_profit_amount,
-        "time_stop_date": time_stop_date.strftime("%d/%m/%Y"),
-        "time_stop_dte": (time_stop_date - dt.date.today()).days,
-    }
-
-    # --- Probabilités Réelles via Intégration Log-Normale (GBM) ---
-    result["sigma"] = sigma  # stocké pour la simulation
-    # Volatilité historique réalisée pour le mouvement du sous-jacent
-    sigma_move = compute_historical_vol(ticker) or sigma
-    probs = compute_real_probabilities(
-        legs=result["legs"], spot=spot, dte=dte,
-        sigma=sigma, qty=1,  # qty=1 car montants non encore multipliés
-        take_profit=take_profit_amount,
-        max_risk=result["max_risk"],
-        sigma_move=sigma_move,
-    )
-    result["probabilities"] = probs
-    result["pop"] = probs["p_breakeven"]  # rétro-compatibilité
-    result["win_rate_estime"] = probs["p_take_profit"]
-
-    # --- Espérance Mathématique (EV) via intégration numérique complète ---
-    result["ev"] = probs["expected_pnl"]
-
-    # --- Calcul des Grecques agrégées ---
-    net_greeks = {"delta": 0, "gamma": 0, "theta": 0, "vega": 0, "iv": sigma * 100}
-    for leg in result["legs"]:
-        leg_T = leg["dte"] / 365.0
-        greeks = compute_leg_greeks(leg, spot, leg_T, sigma)
-        net_greeks["delta"] += greeks["delta"]
-        net_greeks["gamma"] += greeks["gamma"]
-        net_greeks["theta"] += greeks["theta"]
-        net_greeks["vega"] += greeks["vega"]
-    # Multiply by 100 for per-contract values
-    for k in ["delta", "gamma", "theta", "vega"]:
-        net_greeks[k] = round(net_greeks[k] * 100, 2)
-    net_greeks["iv"] = round(net_greeks["iv"], 1)
-    result["greeks"] = net_greeks
-
-    # --- Multiplicateur de quantité (Position Sizing) ---
-    if result["max_risk"] > 0:
-        qty = max(1, int(budget // result["max_risk"]))
-    else:
-        qty = 1
-    result["qty"] = qty
-
-    if qty > 1:
-        result["max_risk"] = round(result["max_risk"] * qty, 2)
-        result["max_profit"] = round(result["max_profit"] * qty, 2)
-        result["credit_or_debit"] = round(result["credit_or_debit"] * qty, 2)
-        result["exit_plan"]["take_profit"] = round(result["exit_plan"]["take_profit"] * qty, 2)
-        # EV intégrée, se multiplie linéairement par la quantité
-        result["ev"] = round(result["ev"] * qty, 2)
-        for k in ["delta", "gamma", "theta", "vega"]:
-            result["greeks"][k] = round(result["greeks"][k] * qty, 2)
-
-    # --- RISK MANAGER : Kill Switch — Rejet EV Fortement Négative ---
-    # Le seuil est -20% du risque max. Le modèle BS est conservateur
-    # (il ignore la gestion active, le mean-reversion d'IV, les sorties
-    # anticipées), donc on ne bloque que les trades structurellement perdants.
-    ev_threshold = -0.20 * result["max_risk"]
-    if result.get("ev", 0) < ev_threshold:
-        raise ValueError(
-            f"Espérance Mathématique (EV) trop négative ({result['ev']:.2f}$). "
-            f"Le ratio Risque/Gain est structurellement perdant. "
-            f"Trade formellement rejeté."
-        )
-
-    return result
-
-
-# ──────────────────────────────────────────────
-# 5b. INDICATEURS AVANCÉS — TENDANCE, EARNINGS, ROC
-# ──────────────────────────────────────────────
-
-def compute_trend_and_risk_data(ticker: str, spot: float, bias: str,
-                                 dte: int, max_risk: float, ev: float,
-                                 max_profit: float):
-    """
-    Calcule les indicateurs avancés pour un trade validé :
-    - EV Yield (%) : rendement de l'EV sur le risque
-    - ROC Annualisé (%) : Return on Capital annualisé
-    - SMA 50 : moyenne mobile 50 jours
-    - Alignement Tendance : cohérence biais / SMA
-    - Earnings Risk : risque de résultats avant le time stop
-    """
-    result = {}
-
-    # ── EV Yield (%) ──
-    result["ev_yield"] = (ev / max_risk) * 100 if max_risk != 0 else 0.0
-
-    # ── ROC Annualisé (%) ──
-    holding_days = max(1, dte - 21)
-    result["roc_annualise"] = (max_profit / max_risk) * (365 / holding_days) * 100 if max_risk != 0 else 0.0
-
-    # ── SMA 50 + RSI 14 + Distance SMA ──
-    sma50 = None
-    current_rsi = None
-    dist_sma = None
-    try:
-        tk = yf.Ticker(ticker)
-        hist = tk.history(period="6mo")
-        if not hist.empty and len(hist) >= 50:
-            sma50 = float(hist["Close"].rolling(50).mean().iloc[-1])
-        elif not hist.empty:
-            sma50 = float(hist["Close"].mean())
-
-        # RSI (14 jours)
-        if not hist.empty and len(hist) >= 15:
-            delta = hist['Close'].diff()
-            gain = (delta.where(delta > 0, 0)).ewm(span=14, adjust=False).mean()
-            loss = (-delta.where(delta < 0, 0)).ewm(span=14, adjust=False).mean()
-            rs = gain / loss
-            rsi = 100 - (100 / (1 + rs))
-            current_rsi = float(rsi.iloc[-1])
-
-        # Distance SMA (%)
-        if sma50 is not None and sma50 != 0:
-            dist_sma = ((spot - sma50) / sma50) * 100
-    except Exception:
-        pass
-    result["sma50"] = sma50
-    result["rsi"] = current_rsi
-    result["dist_sma"] = dist_sma
-
-    # ── Alignement Tendance (Filtre de Surchauffe) ──
-    if sma50 is None or current_rsi is None:
-        result["alignement"] = "➖ N/A"
-    elif bias == "Haussier":
-        if current_rsi > 70 or (dist_sma is not None and dist_sma > 10.0):
-            result["alignement"] = "⚠️ Suracheté (Rejet)"
-        elif current_rsi < 30:
-            result["alignement"] = "🎯 Achat sur Repli (Oversold)"
-        elif spot > sma50:
-            result["alignement"] = "✅ Validé (Sain)"
-        else:
-            result["alignement"] = "❌ Contre-tendance"
-    elif bias == "Baissier":
-        if current_rsi < 30 or (dist_sma is not None and dist_sma < -10.0):
-            result["alignement"] = "⚠️ Survendu (Rejet)"
-        elif current_rsi > 70 or (dist_sma is not None and dist_sma > 10.0):
-            result["alignement"] = "🎯 Mean Reversion"
-        elif spot < sma50:
-            result["alignement"] = "✅ Validé (Sain)"
-        else:
-            result["alignement"] = "❌ Contre-tendance"
-    elif bias == "Neutre":
-        if current_rsi > 70 or current_rsi < 30:
-            result["alignement"] = "⚠️ Élastique tendu (Rejet)"
-        else:
-            result["alignement"] = "✅ Validé (Range)"
-
-    # ── Earnings Risk ──
-    time_stop_date = dt.date.today() + dt.timedelta(days=max(1, dte - 21))
-    try:
-        tk = yf.Ticker(ticker)
-        cal = tk.calendar
-        if cal is not None and not (hasattr(cal, 'empty') and cal.empty):
-            # cal peut être un DataFrame ou un dict
-            earnings_date = None
-            if isinstance(cal, pd.DataFrame):
-                if "Earnings Date" in cal.columns:
-                    earnings_date = pd.to_datetime(cal["Earnings Date"].iloc[0]).date()
-                elif "Earnings Date" in cal.index:
-                    val = cal.loc["Earnings Date"].iloc[0]
-                    earnings_date = pd.to_datetime(val).date()
-            elif isinstance(cal, dict):
-                ed = cal.get("Earnings Date") or cal.get("earnings_date")
-                if ed:
-                    if isinstance(ed, list) and len(ed) > 0:
-                        earnings_date = pd.to_datetime(ed[0]).date()
-                    else:
-                        earnings_date = pd.to_datetime(ed).date()
-
-            if earnings_date and earnings_date <= time_stop_date:
-                result["earnings_risk"] = "⚠️ Danger"
-            elif earnings_date:
-                result["earnings_risk"] = "✅ OK"
-            else:
-                result["earnings_risk"] = "✅ N/A"
-        else:
-            result["earnings_risk"] = "✅ N/A"
-    except Exception:
-        result["earnings_risk"] = "✅ N/A"
-
-    return result
-
+inject_css()
 
 # ──────────────────────────────────────────────
 # 6. INTERFACE UTILISATEUR — SIDEBAR
@@ -2066,6 +81,16 @@ def compute_trend_and_risk_data(ticker: str, spot: float, bias: str,
 
 with st.sidebar:
     st.markdown("## ⚙️ Paramètres")
+
+    # ── Indicateur source de données ──
+    if _provider.ibkr_connected:
+        st.markdown("🟢 **IBKR** connecté (temps réel)")
+    elif _provider._ibkr_available:
+        st.markdown("🟠 **IBKR** disponible (pas encore connecté)")
+    else:
+        _reason = "ib_insync absent" if _provider._ibkr is None else "TWS/Gateway non détecté"
+        st.markdown(f"🟡 **yfinance** uniquement — {_reason}")
+
     st.markdown("---")
 
     # Ticker avec auto-complétion
@@ -2133,11 +158,18 @@ with st.sidebar:
     except Exception:
         _market_open = True  # en cas d'erreur, on laisse passer
 
-    if not _market_open:
+    # ── Mode hors-séance (bypass si IBKR connecté) ──
+    _force_analysis = False
+    if not _market_open and _provider.ibkr_connected:
+        _force_analysis = st.checkbox("🌙 Mode hors-séance (données IBKR delayed)", value=False)
+
+    _can_analyze = _market_open or _force_analysis
+
+    if not _can_analyze:
         st.warning("🔒 Marché fermé — analyse indisponible")
 
-    analyze_btn = st.button("🔍  Analyser", use_container_width=True, type="primary", disabled=not _market_open)
-    scan_btn = st.button("🔎  Scanner Tous les Tickers", use_container_width=True, disabled=not _market_open)
+    analyze_btn = st.button("🔍  Analyser", use_container_width=True, type="primary", disabled=not _can_analyze)
+    scan_btn = st.button("🔎  Scanner Tous les Tickers", use_container_width=True, disabled=not _can_analyze)
 
     st.markdown("---")
     st.caption("📊 Options Robo-Advisor v1.0")
@@ -2175,7 +207,7 @@ if scan_btn:
                 s = get_spot_price(t)
                 v, vs = get_vol_index(t)
                 ivr = compute_iv_rank(t)
-                strat = build_strategy(s, v, ivr, b, budget, t, vs)
+                strat = build_strategy(s, v, ivr, b, budget, t, vs, data_provider=_provider)
                 qty = strat.get("qty", 1)
                 unit_risk = round(strat["max_risk"] / qty, 2) if qty > 0 else strat["max_risk"]
                 # Indicateurs avancés
@@ -2253,27 +285,104 @@ if scan_btn:
     )
     st.stop()
 
-if not analyze_btn:
-    # Bannière marché fermé
-    if not _market_open and _market_hours_msg:
-        st.markdown("""<div style="
-            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-            border: 2px solid #e94560;
-            border-radius: 16px;
-            padding: 2.5rem;
-            text-align: center;
-            margin: 2rem 0;
-        ">
-            <div style="font-size: 3rem; margin-bottom: 0.5rem;">🔒</div>
-            <h2 style="color: #e94560; margin: 0 0 1rem 0;">Marché Fermé</h2>
-            <p style="color: #ccc; font-size: 1.1rem; line-height: 1.6;">""" + _market_hours_msg.replace('\n\n', '<br>').replace('**', '<b>', 1).replace('**', '</b>', 1).replace('**', '<b>', 1).replace('**', '</b>', 1).replace('**', '<b>', 1).replace('**', '</b>', 1) + """</p>
-            <p style="color: #888; font-size: 0.9rem; margin-top: 1.5rem;">Les données d'options (bid/ask) ne sont pas fiables en dehors des heures de séance.<br>
-            L'analyse est désactivée pour éviter des résultats incorrects.</p>
-        </div>""", unsafe_allow_html=True)
+if analyze_btn:
+    # Marquer l'analyse comme faite pour persister entre les reruns
+    st.session_state["analysis_done"] = True
+    st.session_state["analysis_ticker"] = ticker
+
+_has_analysis = st.session_state.get("analysis_done", False) and st.session_state.get("analysis_ticker") == ticker
+
+if not analyze_btn and not _has_analysis:
+    # ── Portfolio IBKR (si connecté) — chargement à la demande ──
+    if _provider.ibkr_connected and hasattr(_provider, '_ibkr') and _provider._ibkr:
+        if st.button("💼 Charger le portefeuille IBKR", use_container_width=True):
+            with st.spinner("📊 Chargement…"):
+                try:
+                    st.session_state["ibkr_account"] = _provider._ibkr.get_account_summary()
+                    st.session_state["ibkr_portfolio"] = _provider._ibkr.get_portfolio()
+                except Exception as e:
+                    st.warning(f"⚠️ {e}")
+                    st.session_state.pop("ibkr_account", None)
+
+        if "ibkr_account" in st.session_state:
+            account = st.session_state["ibkr_account"]
+            portfolio = st.session_state.get("ibkr_portfolio", [])
+
+            st.markdown("### 💼 Portefeuille IBKR")
+
+            _cur = account.get("currency", "USD")
+            _sym = "€" if _cur == "EUR" else "$"
+            mc1, mc2, mc3, mc4 = st.columns(4)
+            nlv = account.get("NetLiquidation", 0)
+            cash = account.get("TotalCashValue", 0)
+            bp = account.get("BuyingPower", 0)
+            upnl = account.get("UnrealizedPnL", 0)
+
+            with mc1:
+                st.metric("🏦 Valeur Nette", f"{_sym}{nlv:,.0f}")
+            with mc2:
+                st.metric("💵 Cash", f"{_sym}{cash:,.0f}")
+            with mc3:
+                st.metric("⚡ Buying Power", f"{_sym}{bp:,.0f}")
+            with mc4:
+                pnl_delta = "Gain" if upnl >= 0 else "Perte"
+                st.metric("📈 P&L Non Réalisé", f"{_sym}{upnl:,.0f}",
+                         delta=pnl_delta,
+                         delta_color="normal" if upnl >= 0 else "inverse")
+
+            if portfolio:
+                import pandas as _pd
+                rows = []
+                for p in portfolio:
+                    p_sym = "€" if p.get("currency", "USD") == "EUR" else "$"
+                    rows.append({
+                        "Instrument": p["label"],
+                        "Type": p["type"],
+                        "Qté": int(p["position"]) if p["position"] == int(p["position"]) else p["position"],
+                        "Prix": f"{p_sym}{p['market_price']:,.2f}",
+                        "Valeur": f"{p_sym}{p['market_value']:,.0f}",
+                        "Coût Moy.": f"{p_sym}{p['avg_cost']:,.2f}",
+                        "P&L": round(p["unrealized_pnl"], 2),
+                        "P&L (%)": round(
+                            (p["unrealized_pnl"] / (abs(p["avg_cost"]) * abs(p["position"]))) * 100, 1
+                        ) if p["avg_cost"] and p["position"] else 0.0,
+                    })
+
+                df = _pd.DataFrame(rows)
+                st.dataframe(
+                    df,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "P&L": st.column_config.NumberColumn("P&L", format="%.2f"),
+                        "P&L (%)": st.column_config.NumberColumn("P&L (%)", format="%.1f%%"),
+                    },
+                )
+            else:
+                st.info("Aucune position ouverte.")
+
+            st.markdown("---")
+
+    # Bannière marché fermé (seulement si pas de bypass hors-séance)
+    if not _can_analyze and _market_hours_msg:
+        st.markdown("""\
+<div style="
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    border: 2px solid #e94560;
+    border-radius: 16px;
+    padding: 2.5rem;
+    text-align: center;
+    margin: 2rem 0;
+">
+    <div style="font-size: 3rem; margin-bottom: 0.5rem;">🔒</div>
+    <h2 style="color: #e94560; margin: 0 0 1rem 0;">Marché Fermé</h2>
+    <p style="color: #ccc; font-size: 1.1rem; line-height: 1.6;">""" + _market_hours_msg.replace('\n\n', '<br>').replace('**', '<b>', 1).replace('**', '</b>', 1).replace('**', '<b>', 1).replace('**', '</b>', 1).replace('**', '<b>', 1).replace('**', '</b>', 1) + """</p>
+    <p style="color: #888; font-size: 0.9rem; margin-top: 1.5rem;">Les données d'options (bid/ask) ne sont pas fiables en dehors des heures de séance.<br>
+    L'analyse est désactivée pour éviter des résultats incorrects.</p>
+</div>""", unsafe_allow_html=True)
         st.stop()
 
     # État initial : instructions
-    st.markdown("---")
     col1, col2, col3 = st.columns(3)
     with col1:
         st.markdown("### 1️⃣ Sélectionnez")
@@ -2288,13 +397,38 @@ if not analyze_btn:
 
 # ── Exécution de l'analyse ──
 try:
-    with st.spinner(f"🔄 Analyse de **{ticker}** en cours…"):
-        spot = get_spot_price(ticker)
-        vix, vol_symbol = get_vol_index(ticker)
-        vol_label = VOL_INDEX_NAMES.get(vol_symbol, vol_symbol.replace("^", ""))
-        iv_rank = compute_iv_rank(ticker)
+    # Récupérer ou recalculer les données de marché
+    if analyze_btn or "analysis_cache" not in st.session_state or st.session_state.get("analysis_ticker") != ticker:
+        with st.spinner(f"🔄 Analyse de **{ticker}** en cours…"):
+            spot = get_spot_price(ticker)
+            vix, vol_symbol = get_vol_index(ticker)
+            vol_label = VOL_INDEX_NAMES.get(vol_symbol, vol_symbol.replace("^", ""))
+            iv_rank = compute_iv_rank(ticker)
+            st.session_state["analysis_cache"] = {
+                "spot": spot, "vix": vix, "vol_symbol": vol_symbol,
+                "vol_label": vol_label, "iv_rank": iv_rank,
+            }
+    else:
+        # Utiliser le cache pour les reruns (bouton ordre, etc.)
+        _cache = st.session_state["analysis_cache"]
+        spot = _cache["spot"]
+        vix = _cache["vix"]
+        vol_symbol = _cache["vol_symbol"]
+        vol_label = _cache["vol_label"]
+        iv_rank = _cache["iv_rank"]
 
     # ─── Section 1 : CONTEXTE MACRO ───
+    # Badge source de données
+    src_spot = _provider.last_source.get("get_spot_price", "yfinance")
+    src_vol = _provider.last_source.get("get_vol_index", "yfinance")
+    src_chain = _provider.last_source.get("get_options_chain", "yfinance")
+    src_icon = lambda s: "🟢" if s == "IBKR" else "🟡"
+    st.caption(
+        f"📡 Sources : "
+        f"{src_icon(src_spot)} Spot **{src_spot}** · "
+        f"{src_icon(src_vol)} Vol **{src_vol}** · "
+        f"{src_icon(src_chain)} Chaîne **{src_chain}**"
+    )
     st.markdown("### 🌍 Contexte Macro")
     c1, c2, c3 = st.columns(3)
 
@@ -2324,12 +458,18 @@ try:
     st.markdown("---")
 
     # ─── Section 2 : STRATÉGIE ───
-    with st.spinner("🧠 Construction de la stratégie optimale…"):
-        strategy = build_strategy(spot, vix, iv_rank, bias, budget, ticker, vol_symbol)
-        adv_data = compute_trend_and_risk_data(
-            ticker, spot, bias, int(strategy["dte"]),
-            strategy["max_risk"], strategy.get("ev", 0), strategy["max_profit"]
-        )
+    if analyze_btn or "strategy_cache" not in st.session_state or st.session_state.get("analysis_ticker") != ticker:
+        with st.spinner("🧠 Construction de la stratégie optimale…"):
+            strategy = build_strategy(spot, vix, iv_rank, bias, budget, ticker, vol_symbol, data_provider=_provider)
+            adv_data = compute_trend_and_risk_data(
+                ticker, spot, bias, int(strategy["dte"]),
+                strategy["max_risk"], strategy.get("ev", 0), strategy["max_profit"]
+            )
+            st.session_state["strategy_cache"] = strategy
+            st.session_state["adv_data_cache"] = adv_data
+    else:
+        strategy = st.session_state["strategy_cache"]
+        adv_data = st.session_state["adv_data_cache"]
 
     # Verdict
     st.markdown(f"""
@@ -2372,6 +512,60 @@ try:
             "Prix unitaire": st.column_config.TextColumn("Prix", width="small"),
         },
     )
+
+    # ─── Bouton ordres IBKR (si connecté) ───
+    if _provider.ibkr_connected and hasattr(_provider, '_ibkr') and _provider._ibkr:
+        st.markdown("")
+
+        # Résumé de l'ordre (calculé depuis les legs)
+        _net = sum(
+            leg["price"] if leg["action"] == "SELL" else -leg["price"]
+            for leg in strategy["legs"]
+        )
+        _action = "SELL" if _net > 0 else "BUY"
+        _price = abs(_net)
+        st.info(
+            f"**Ordre combo prêt** : {_action} {qty}x @ ${_price:.2f} · "
+            f"Risque max : ${strategy['max_risk']:,.0f} · "
+            f"Profit max : ${strategy['max_profit']:,.0f}"
+        )
+
+        if st.button("📋 Préparer l'ordre dans TWS", type="primary", use_container_width=True):
+            with st.spinner("📡 Qualification des contrats…"):
+                try:
+                    _provider._ibkr._ensure_connected()
+                    result = _provider._ibkr.place_order(strategy, ticker)
+                    status = result.get("status", "Unknown")
+                    if status.lower() in ("cancelled", "inactive", "apicancelled"):
+                        logs_text = "\n".join(result.get("logs", [])) or "Aucun détail"
+                        st.warning(
+                            f"⚠️ Ordre #{result['order_id']} **rejeté par TWS** (statut: {status})\n\n"
+                            f"```\n{logs_text}\n```\n\n"
+                            f"Vérifiez dans TWS : permissions options US, "
+                            f"marge disponible, ou limites API."
+                        )
+                    else:
+                        st.success(
+                            f"✅ {result['message']}\n\n"
+                            f"Statut : **{status}** — "
+                            f"L'ordre est prêt dans TWS. "
+                            f"**Cliquez sur « Transmettre » dans TWS** pour l'exécuter."
+                        )
+                except Exception as e:
+                    st.error(f"❌ Erreur : {e}")
+
+        # Bouton annuler tous les ordres
+        if st.button("🗑️ Annuler tous les ordres ouverts", use_container_width=True):
+            with st.spinner("❌ Annulation…"):
+                try:
+                    cancelled = _provider._ibkr.cancel_all_orders()
+                    if cancelled:
+                        ids = ", ".join(f"#{c['order_id']}" for c in cancelled)
+                        st.success(f"✅ {len(cancelled)} ordre(s) annulé(s) : {ids}")
+                    else:
+                        st.info("Aucun ordre ouvert à annuler.")
+                except Exception as e:
+                    st.error(f"❌ Erreur annulation : {e}")
 
     st.markdown("---")
 
@@ -2814,10 +1008,7 @@ try:
                 if ml_crossings:
                     fig.add_hrect(y0=ml_crossings[-1], y1=y_max_zone, fillcolor=RED_DARK, line_width=0, layer="below")
 
-            # BE line
-            fig.add_hline(y=be, line_dash="dash", line_color="#60A5FA", line_width=1,
-                annotation_text=f"BE ${be:.0f}", annotation_position="right",
-                annotation_font_color="#60A5FA", annotation_font_size=11)
+
             # TP line
             fig.add_hline(y=spot_tp, line_dash="dash", line_color="#34D399", line_width=1,
                 annotation_text=f"TP ${spot_tp:.0f}", annotation_position="right",
@@ -2843,11 +1034,7 @@ try:
                 fig.add_hrect(y0=be_sorted[0], y1=be_sorted[-1], fillcolor=RED_LIGHT, line_width=0, layer="below")
                 fig.add_hrect(y0=be_sorted[-1], y1=y_max_zone, fillcolor=GREEN_LIGHT, line_width=0, layer="below")
 
-            # BE lines
-            for be in be_sorted:
-                fig.add_hline(y=be, line_dash="dash", line_color="#60A5FA", line_width=1,
-                    annotation_text=f"BE ${be:.0f}", annotation_position="right",
-                    annotation_font_color="#60A5FA", annotation_font_size=11)
+
 
         # Ligne verticale : date de sortie (time-stop)
         dte_val = int(strategy["dte"])

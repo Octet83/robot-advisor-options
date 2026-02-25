@@ -150,21 +150,24 @@ class TestStrategyRouting:
         exp_date = (dt.date.today() + dt.timedelta(days=45)).strftime("%Y-%m-%d")
         puts, calls = _make_basic_chain()
 
-        with patch("app.get_options_chain", return_value=(exp_date, calls, puts, 45)):
-            leaps_exp = (dt.date.today() + dt.timedelta(days=365)).strftime("%Y-%m-%d")
-            leaps_calls = _make_options_df([
-                {"strike": s, "bid": b, "ask": a, "impliedVolatility": 0.22}
-                for s, b, a in [(75, 27, 28), (80, 22, 23), (85, 17, 18), (90, 13, 14), (95, 9, 10)]
-            ])
-            with patch("app.get_leaps_chain", return_value=(leaps_exp, leaps_calls, _make_options_df([{"strike": 75, "bid": 0.5, "ask": 1, "impliedVolatility": 0.22}]), 365)):
-                short_exp = (dt.date.today() + dt.timedelta(days=20)).strftime("%Y-%m-%d")
-                short_calls = _make_options_df([
-                    {"strike": s, "bid": b, "ask": a, "impliedVolatility": 0.25}
-                    for s, b, a in [(98, 2.0, 2.5), (100, 1.5, 2.0), (102, 1.0, 1.5)]
-                ])
-                with patch("app.get_short_term_chain", return_value=(short_exp, short_calls, _make_options_df([{"strike": 100, "bid": 1.5, "ask": 2.0, "impliedVolatility": 0.25}]), 20)):
-                    with patch("app.compute_real_probabilities", return_value={"p_take_profit": 99.0, "p_breakeven": 99.5, "p_max_loss": 0.1, "expected_pnl": 50.0}):
-                        return build_strategy(spot=spot, vix=vix, iv_rank=iv_rank, bias=bias, budget=budget, ticker=ticker)
+        leaps_exp = (dt.date.today() + dt.timedelta(days=365)).strftime("%Y-%m-%d")
+        leaps_calls = _make_options_df([
+            {"strike": s, "bid": b, "ask": a, "impliedVolatility": 0.22}
+            for s, b, a in [(75, 27, 28), (80, 22, 23), (85, 17, 18), (90, 13, 14), (95, 9, 10)]
+        ])
+        short_exp = (dt.date.today() + dt.timedelta(days=20)).strftime("%Y-%m-%d")
+        short_calls = _make_options_df([
+            {"strike": s, "bid": b, "ask": a, "impliedVolatility": 0.25}
+            for s, b, a in [(98, 2.0, 2.5), (100, 1.5, 2.0), (102, 1.0, 1.5)]
+        ])
+
+        class MockProvider:
+            def get_options_chain(self, t): return (exp_date, calls, puts, 45)
+            def get_leaps_chain(self, t): return (leaps_exp, leaps_calls, _make_options_df([{"strike": 75, "bid": 0.5, "ask": 1, "impliedVolatility": 0.22}]), 365)
+            def get_short_term_chain(self, t): return (short_exp, short_calls, _make_options_df([{"strike": 100, "bid": 1.5, "ask": 2.0, "impliedVolatility": 0.25}]), 20)
+
+        with patch("engine.strategy.compute_real_probabilities", return_value={"p_take_profit": 99.0, "p_breakeven": 99.5, "p_max_loss": 0.1, "expected_pnl": 50.0}):
+            return build_strategy(spot=spot, vix=vix, iv_rank=iv_rank, bias=bias, budget=budget, ticker=ticker, data_provider=MockProvider())
 
     def test_high_vol_neutral_iron_condor(self):
         assert "Iron Condor" in self._run_routing(25, 60, "Neutre")["name"]
@@ -194,9 +197,10 @@ class TestRiskManager:
     def _build(self):
         exp = (dt.date.today() + dt.timedelta(days=45)).strftime("%Y-%m-%d")
         puts, calls = _make_chain_for_bull_put()
-        with patch("app.get_options_chain", return_value=(exp, calls, puts, 45)):
-            with patch("app.compute_real_probabilities", return_value={"p_take_profit": 90.0, "p_breakeven": 60.0, "p_max_loss": 5.0, "expected_pnl": 75.0}):
-                return build_strategy(spot=100, vix=25, iv_rank=60, bias="Haussier", budget=1000, ticker="SPY")
+        class MockProvider:
+            def get_options_chain(self, t): return (exp, calls, puts, 45)
+        with patch("engine.strategy.compute_real_probabilities", return_value={"p_take_profit": 90.0, "p_breakeven": 60.0, "p_max_loss": 5.0, "expected_pnl": 75.0}):
+            return build_strategy(spot=100, vix=25, iv_rank=60, bias="Haussier", budget=1000, ticker="SPY", data_provider=MockProvider())
 
     def test_qty(self):       assert self._build()["qty"] == 3
     def test_max_risk(self):  assert self._build()["max_risk"] == 900.0
@@ -217,9 +221,10 @@ class TestKillSwitches:
         exp = (dt.date.today() + dt.timedelta(days=45)).strftime("%Y-%m-%d")
         _, calls = _make_basic_chain()
         puts, _ = _make_basic_chain()
-        with patch("app.get_options_chain", return_value=(exp, calls, puts, 45)):
-            with pytest.raises(ValueError, match=r"(?i)trop bas"):
-                build_strategy(spot=4.50, vix=20, iv_rank=50, bias="Haussier", budget=500, ticker="X")
+        class MockProvider:
+            def get_options_chain(self, t): return (exp, calls, puts, 45)
+        with pytest.raises(ValueError, match=r"(?i)trop bas"):
+            build_strategy(spot=4.50, vix=20, iv_rank=50, bias="Haussier", budget=500, ticker="X", data_provider=MockProvider())
 
     def test_illiquidity(self):
         """Options avec bid=0 ou spreads > 40% → rejetées par le filtre de liquidité."""
@@ -234,17 +239,19 @@ class TestKillSwitches:
             {"strike": 105, "bid": 0.0, "ask": 1.0, "impliedVolatility": 0.25},
             {"strike": 110, "bid": 0.0, "ask": 0.5, "impliedVolatility": 0.25},
         ])
-        with patch("app.get_options_chain", return_value=(exp, calls, puts, 45)):
-            with pytest.raises(ValueError, match=r"(?i)illiquides"):
-                build_strategy(spot=100, vix=25, iv_rank=60, bias="Haussier", budget=5000, ticker="SPY")
+        class MockProvider:
+            def get_options_chain(self, t): return (exp, calls, puts, 45)
+        with pytest.raises(ValueError, match=r"(?i)illiquides"):
+            build_strategy(spot=100, vix=25, iv_rank=60, bias="Haussier", budget=5000, ticker="SPY", data_provider=MockProvider())
 
     def test_negative_ev(self):
         exp = (dt.date.today() + dt.timedelta(days=45)).strftime("%Y-%m-%d")
         puts, calls = _make_chain_for_bull_put()
-        with patch("app.get_options_chain", return_value=(exp, calls, puts, 45)):
-            with patch("app.compute_real_probabilities", return_value={"p_take_profit": 5.0, "p_breakeven": 10.0, "p_max_loss": 80.0, "expected_pnl": -250.0}):
-                with pytest.raises(ValueError, match=r"(?i)espérance"):
-                    build_strategy(spot=100, vix=25, iv_rank=60, bias="Haussier", budget=5000, ticker="SPY")
+        class MockProvider:
+            def get_options_chain(self, t): return (exp, calls, puts, 45)
+        with patch("engine.strategy.compute_real_probabilities", return_value={"p_take_profit": 5.0, "p_breakeven": 10.0, "p_max_loss": 80.0, "expected_pnl": -250.0}):
+            with pytest.raises(ValueError, match=r"(?i)espérance"):
+                build_strategy(spot=100, vix=25, iv_rank=60, bias="Haussier", budget=5000, ticker="SPY", data_provider=MockProvider())
 
 
 # ═══════════════════════════════════════════════
