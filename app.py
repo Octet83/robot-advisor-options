@@ -455,6 +455,341 @@ if not analyze_btn and not _has_analysis:
         _journal_html += "</table></div>"
         st.markdown(_journal_html, unsafe_allow_html=True)
 
+        # ── Vue détail par trade (expanders) ──
+        st.markdown("")  # spacer
+        for _t in _all_trades:
+            _tid = _t["id"]
+            _tk = _t["ticker"]
+            _sname = _t["strategy_name"]
+            _exp_str = _t.get("expiration", "")
+            _legs = _json.loads(_t.get("legs_json", "[]"))
+            _max_profit = _t.get("max_profit") or 0
+            _max_risk = _t.get("max_risk") or 0
+            _take_profit = _t.get("take_profit") or 0
+            _credit_debit = _t.get("credit_debit") or 0
+            _spot_entry = _t.get("spot_at_entry")
+            _qty = _t.get("qty", 1) or 1
+            _cur_spot = _current_spots.get(_tk)
+
+            # Skip si données insuffisantes
+            if not _legs or not _cur_spot or not _exp_str:
+                continue
+
+            # Calcul DTE
+            try:
+                _exp_date = _dt_cls.strptime(_exp_str, "%Y-%m-%d").date()
+                _dte = (_exp_date - _today).days
+            except ValueError:
+                continue
+
+            _label = f"📊 #{_tid} — {_tk} · {_sname} · {_dte}j DTE"
+            with st.expander(_label, expanded=False):
+                # ── Calcul P&L via simulate_pnl ──
+                _sigma_est = 0.25  # estimation par défaut
+                _remaining_dte = max(_dte, 1)
+                try:
+                    _pnl = simulate_pnl(_legs, _cur_spot, _remaining_dte, _sigma_est, _qty)
+                except Exception:
+                    _pnl = 0.0
+
+                _pnl_pct = (_pnl / _max_risk * 100) if _max_risk else 0.0
+                _pnl_color = "green" if _pnl >= 0 else "red"
+                _pnl_sign = "+" if _pnl > 0 else ""
+
+                # Progression vers TP
+                _tp_progress = 0.0
+                _tp_remaining_pct = 100.0
+                if _take_profit > 0:
+                    _tp_progress = max(0, min(100, (_pnl / _take_profit) * 100))
+                    _tp_remaining_pct = max(0, 100 - _tp_progress)
+
+                # Jours avant 21 DTE
+                _days_before_21dte = _dte - 21
+                if _days_before_21dte > 0:
+                    _dte_label = f"{_days_before_21dte}j"
+                    _dte_color = "green" if _days_before_21dte > 10 else "amber"
+                elif _days_before_21dte == 0:
+                    _dte_label = "AUJOURD'HUI"
+                    _dte_color = "red"
+                else:
+                    _dte_label = f"DÉPASSÉ ({abs(_days_before_21dte)}j)"
+                    _dte_color = "red"
+
+                # ── Section 1 : Métriques P&L ──
+                _spot_change = ""
+                if _spot_entry:
+                    _spot_diff = _cur_spot - _spot_entry
+                    _spot_pct = (_spot_diff / _spot_entry) * 100
+                    _spot_change = f'<div style="font-size:0.72rem;color:#94A3B8;margin-top:0.15rem;font-family:Fira Sans,sans-serif;">{("+" if _spot_pct >= 0 else "")}{_spot_pct:.1f}% vs entrée</div>'
+
+                _color_map = {"green": "#34D399", "red": "#F87171", "amber": "#FBBF24", "blue": "#60A5FA"}
+                _pnl_hex = _color_map.get(_pnl_color, "#F8FAFC")
+                _dte_hex = _color_map.get(_dte_color, "#F8FAFC")
+
+                _card_style = (
+                    "background:rgba(30,41,59,0.6);"
+                    "border:1px solid rgba(255,255,255,0.08);"
+                    "border-radius:12px;"
+                    "padding:1rem;"
+                    "text-align:center;"
+                )
+                _label_style = (
+                    "color:#94A3B8;"
+                    "font-size:0.72rem;"
+                    "font-weight:600;"
+                    "text-transform:uppercase;"
+                    "letter-spacing:0.06em;"
+                    "font-family:Fira Sans,sans-serif;"
+                    "margin-bottom:0.3rem;"
+                )
+                _value_style = (
+                    "font-family:Fira Code,monospace;"
+                    "font-size:1.25rem;"
+                    "font-weight:700;"
+                )
+                _sub_style = (
+                    "font-size:0.72rem;"
+                    "color:#94A3B8;"
+                    "margin-top:0.15rem;"
+                    "font-family:Fira Sans,sans-serif;"
+                )
+
+                st.markdown(f'''
+                <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:0.75rem 0;">
+                    <div style="{_card_style}">
+                        <div style="{_label_style}">💰 P&L Actuel</div>
+                        <div style="{_value_style}color:{_pnl_hex};">{_pnl_sign}${abs(_pnl):,.2f}</div>
+                        <div style="{_sub_style}">{_pnl_sign}{_pnl_pct:.1f}% du risque</div>
+                    </div>
+                    <div style="{_card_style}">
+                        <div style="{_label_style}">📊 Spot Actuel</div>
+                        <div style="{_value_style}color:#60A5FA;">${_cur_spot:,.2f}</div>
+                        {_spot_change}
+                    </div>
+                    <div style="{_card_style}">
+                        <div style="{_label_style}">⏱️ DTE Restant</div>
+                        <div style="{_value_style}color:#F8FAFC;">{_dte}j</div>
+                        <div style="{_sub_style}">Exp. {_exp_str}</div>
+                    </div>
+                    <div style="{_card_style}">
+                        <div style="{_label_style}">🚨 Avant 21 DTE</div>
+                        <div style="{_value_style}color:{_dte_hex};">{_dte_label}</div>
+                        <div style="{_sub_style}">Time-stop</div>
+                    </div>
+                </div>
+                ''', unsafe_allow_html=True)
+
+                # ── Section 2 : Barre de progression vers TP ──
+                _bar_color = "#34D399" if _tp_progress >= 80 else ("#FBBF24" if _tp_progress >= 40 else "#60A5FA")
+                if _pnl < 0:
+                    _bar_color = "#F87171"
+
+                st.markdown(f'''
+                <div style="background:rgba(30,41,59,0.6);border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:0.8rem 1rem;margin:0.5rem 0;">
+                    <div style="display:flex;justify-content:space-between;font-size:0.78rem;color:#CBD5E1;margin-bottom:0.5rem;font-family:Fira Sans,sans-serif;">
+                        <span>🎯 Progression vers Take Profit (50% max profit)</span>
+                        <span><b style="color:#F8FAFC;">{_tp_progress:.0f}%</b> · Reste {_tp_remaining_pct:.0f}%</span>
+                    </div>
+                    <div style="background:rgba(255,255,255,0.08);border-radius:6px;height:10px;overflow:hidden;">
+                        <div style="height:100%;border-radius:6px;width:{max(0, min(100, _tp_progress)):.0f}%;background:{_bar_color};transition:width 0.3s ease;"></div>
+                    </div>
+                </div>
+                ''', unsafe_allow_html=True)
+
+                # ── Section 3 : Prix Cible & Ordres ──
+                _is_credit = _credit_debit > 0
+                _net_per_contract = abs(_credit_debit) / (_qty * 100) if _qty else 0
+                _tp_per_contract = _take_profit / (_qty * 100) if _qty else 0
+
+                if _is_credit:
+                    _target_price = max(0.01, _net_per_contract - _tp_per_contract)
+                    _order_action = "BUY"
+                    _order_hint = f"Rachetez le combo à ${_target_price:.2f} ou moins pour encaisser 50% du profit max (${_take_profit:,.0f})"
+                else:
+                    _target_price = _net_per_contract + _tp_per_contract
+                    _order_action = "SELL"
+                    _order_hint = f"Revendez le combo à ${_target_price:.2f} ou plus pour encaisser 50% du profit max (${_take_profit:,.0f})"
+
+                # Estimer le prix spot cible pour le TP
+                try:
+                    _tp_spot = estimate_take_profit_spot(
+                        _legs, _cur_spot, _remaining_dte, _sigma_est, _qty, _take_profit
+                    )
+                except Exception:
+                    _tp_spot = None
+
+                _tp_spot_html = ""
+                if _tp_spot:
+                    _tp_spot_pct = ((_tp_spot - _cur_spot) / _cur_spot) * 100
+                    _tp_spot_html = f'<div style="font-family:Fira Sans,sans-serif;font-size:0.78rem;color:#CBD5E1;margin-top:0.4rem;">📍 Sous-jacent cible ≈ <b style="color:#FBBF24;">${_tp_spot:,.2f}</b> ({"+" if _tp_spot_pct >= 0 else ""}{_tp_spot_pct:.1f}% vs spot actuel)</div>'
+
+                st.markdown(f'''
+                <div style="background:rgba(30,41,59,0.7);border:1px solid rgba(139,92,246,0.25);border-left:3px solid #8B5CF6;border-radius:12px;padding:1rem 1.2rem;margin:0.75rem 0;">
+                    <div style="font-family:Fira Code,monospace;font-size:0.75rem;font-weight:600;color:#8B5CF6;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:0.5rem;">📋 Ordre à passer (GTC)</div>
+                    <div style="font-family:Fira Code,monospace;font-size:1.05rem;color:#F8FAFC;line-height:1.6;">{_order_action} {_qty}x combo @ <b style="color:#FBBF24;">${_target_price:.2f}</b></div>
+                    <div style="font-family:Fira Sans,sans-serif;font-size:0.78rem;color:#CBD5E1;margin-top:0.3rem;">{_order_hint}</div>
+                    {_tp_spot_html}
+                </div>
+                ''', unsafe_allow_html=True)
+
+                # ── Bouton IBKR : placer l'ordre de clôture ──
+                if _provider.ibkr_connected and hasattr(_provider, '_ibkr') and _provider._ibkr:
+                    _btn_key = f"close_order_{_tid}"
+                    if st.button(
+                        f"🚀 Placer l'ordre sur IBKR — {_order_action} {_qty}x @ ${_target_price:.2f} (GTC)",
+                        key=_btn_key,
+                        type="primary",
+                    ):
+                        try:
+                            _provider._ibkr._ensure_connected()
+                            _close_result = _provider._ibkr.place_close_order(
+                                legs=_legs,
+                                ticker=_tk,
+                                qty=_qty,
+                                target_price=_target_price,
+                                is_credit=_is_credit,
+                            )
+                            st.success(
+                                f"✅ {_close_result['message']}\n\n"
+                                f"Status : **{_close_result['status']}** · "
+                                f"Ouvrez TWS pour confirmer la transmission."
+                            )
+                        except Exception as _e:
+                            st.error(f"❌ Erreur IBKR : {_e}")
+                else:
+                    st.caption("🔌 Connectez IBKR pour placer l'ordre automatiquement")
+
+                # ── Section 4 : Chart Plotly ──
+                try:
+                    _hist = _yf_mod.Ticker(_tk).history(period="6mo")
+                    if not _hist.empty:
+                        import plotly.graph_objects as _go
+
+                        _fig = _go.Figure()
+
+                        # Courbe du prix
+                        _fig.add_trace(_go.Scatter(
+                            x=_hist.index, y=_hist["Close"],
+                            mode="lines", name="Prix",
+                            line=dict(color="#60A5FA", width=2),
+                            hovertemplate="$%{y:,.2f}<extra></extra>",
+                        ))
+
+                        # SMA 50
+                        _sma50 = _hist["Close"].rolling(window=50).mean().dropna()
+                        if not _sma50.empty:
+                            _fig.add_trace(_go.Scatter(
+                                x=_sma50.index, y=_sma50,
+                                mode="lines", name="SMA 50",
+                                line=dict(color="#FBBF24", width=1.5),
+                                hovertemplate="SMA50: $%{y:,.2f}<extra></extra>",
+                            ))
+
+                        # Strikes du trade
+                        _strike_colors = ["#F87171", "#FBBF24", "#34D399", "#A78BFA"]
+                        _strikes_unique = sorted(set(l["strike"] for l in _legs))
+                        for _si, _sk in enumerate(_strikes_unique):
+                            _sc = _strike_colors[_si % len(_strike_colors)]
+                            _act = next((l["action"] for l in _legs if l["strike"] == _sk), "")
+                            _ot = next((l["type"] for l in _legs if l["strike"] == _sk), "")
+                            _fig.add_hline(
+                                y=_sk, line_dash="dash", line_color=_sc, line_width=1,
+                                annotation_text=f"{_act} {_ot} ${_sk:.0f}",
+                                annotation_position="right",
+                                annotation_font_color=_sc, annotation_font_size=11,
+                            )
+
+                        # Y-axis range (computed early for zone rects)
+                        _y_min = float(_hist["Low"].min())
+                        _y_max = float(_hist["High"].max())
+                        _all_levels = [_y_min, _y_max, _cur_spot] + _strikes_unique
+                        if _spot_entry:
+                            _all_levels.append(_spot_entry)
+                        _y_range_min = min(_all_levels) * 0.97
+                        _y_range_max = max(_all_levels) * 1.03
+
+                        # Zones profit (vert) / perte (rouge) entre les strikes
+                        if len(_strikes_unique) == 2:
+                            _lo_strike, _hi_strike = _strikes_unique[0], _strikes_unique[1]
+                            # Determine if net debit or credit
+                            _is_debit = _credit_debit < 0
+                            _has_buy_call = any(l["action"] == "BUY" and l["type"].lower() == "call" for l in _legs)
+                            _has_buy_put = any(l["action"] == "BUY" and l["type"].lower() == "put" for l in _legs)
+
+                            if _has_buy_call:
+                                # Bull Call Spread: profit between strikes, loss below low strike
+                                _fig.add_hrect(
+                                    y0=_lo_strike, y1=_hi_strike,
+                                    fillcolor="rgba(52,211,153,0.08)", line_width=0,
+                                    annotation_text="Zone profit", annotation_position="top left",
+                                    annotation_font_color="rgba(52,211,153,0.5)", annotation_font_size=10,
+                                )
+                                _fig.add_hrect(
+                                    y0=_y_range_min, y1=_lo_strike,
+                                    fillcolor="rgba(248,113,113,0.06)", line_width=0,
+                                )
+                            elif _has_buy_put:
+                                # Bear Put Spread: profit between strikes, loss above high strike
+                                _fig.add_hrect(
+                                    y0=_lo_strike, y1=_hi_strike,
+                                    fillcolor="rgba(52,211,153,0.08)", line_width=0,
+                                    annotation_text="Zone profit", annotation_position="top left",
+                                    annotation_font_color="rgba(52,211,153,0.5)", annotation_font_size=10,
+                                )
+                                _fig.add_hrect(
+                                    y0=_hi_strike, y1=_y_range_max,
+                                    fillcolor="rgba(248,113,113,0.06)", line_width=0,
+                                )
+                            else:
+                                # Credit spread (Bull Put / Bear Call): profit outside, loss between
+                                _fig.add_hrect(
+                                    y0=_lo_strike, y1=_hi_strike,
+                                    fillcolor="rgba(248,113,113,0.06)", line_width=0,
+                                    annotation_text="Zone perte max", annotation_position="top left",
+                                    annotation_font_color="rgba(248,113,113,0.5)", annotation_font_size=10,
+                                )
+
+                        # Spot actuel
+                        _fig.add_hline(
+                            y=_cur_spot, line_dash="dot", line_color="#94A3B8", line_width=1,
+                            annotation_text=f"Spot ${_cur_spot:.0f}",
+                            annotation_position="left",
+                            annotation_font_color="#94A3B8", annotation_font_size=11,
+                        )
+
+                        # Spot d'entrée
+                        if _spot_entry:
+                            _fig.add_hline(
+                                y=_spot_entry, line_dash="dot", line_color="#8B5CF6", line_width=1,
+                                annotation_text=f"Entrée ${_spot_entry:.0f}",
+                                annotation_position="left",
+                                annotation_font_color="#8B5CF6", annotation_font_size=11,
+                            )
+
+                        # Y-axis range already computed above
+
+                        _fig.update_layout(
+                            height=350,
+                            margin=dict(l=0, r=80, t=10, b=0),
+                            paper_bgcolor="rgba(0,0,0,0)",
+                            plot_bgcolor="rgba(0,0,0,0)",
+                            xaxis=dict(gridcolor="rgba(51,65,85,0.3)", showgrid=True),
+                            yaxis=dict(
+                                range=[_y_range_min, _y_range_max],
+                                gridcolor="rgba(51,65,85,0.3)", showgrid=True,
+                                tickprefix="$",
+                            ),
+                            legend=dict(
+                                orientation="h", yanchor="bottom", y=1.02,
+                                xanchor="left", x=0, font=dict(size=11),
+                            ),
+                            hovermode="x unified",
+                        )
+
+                        st.plotly_chart(_fig, use_container_width=True, key=f"chart_trade_{_tid}")
+                except Exception:
+                    st.caption("📈 Chart indisponible pour ce ticker.")
+
         # ── Suppression manuelle ──
         with st.expander("🗑️ Supprimer un trade"):
             _trade_ids = [t["id"] for t in _all_trades]

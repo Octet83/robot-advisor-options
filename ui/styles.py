@@ -428,6 +428,131 @@ _CSS = """
         display: flex !important;
         opacity: 1 !important;
     }
+
+    /* ---- Expander dark theme ---- */
+    div[data-testid="stExpander"] {
+        background: rgba(30, 41, 59, 0.5) !important;
+        border: 1px solid rgba(255, 255, 255, 0.08) !important;
+        border-radius: 12px !important;
+        overflow: hidden;
+    }
+    div[data-testid="stExpander"] summary,
+    div[data-testid="stExpander"] summary span,
+    div[data-testid="stExpander"] summary p,
+    div[data-testid="stExpander"] [data-testid="stExpanderToggleIcon"] {
+        color: #F8FAFC !important;
+        background: transparent !important;
+    }
+    div[data-testid="stExpander"] details {
+        background: transparent !important;
+        border: none !important;
+    }
+    div[data-testid="stExpander"] details > summary {
+        background: rgba(15, 23, 42, 0.8) !important;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.06) !important;
+        padding: 0.75rem 1rem !important;
+    }
+    div[data-testid="stExpander"] details > summary:hover {
+        background: rgba(30, 41, 59, 0.9) !important;
+    }
+    div[data-testid="stExpander"] details > div {
+        background: transparent !important;
+    }
+
+    /* ---- Trade Detail View ---- */
+    .td-metrics {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+        gap: 10px;
+        margin: 0.75rem 0;
+    }
+    .td-card {
+        background: rgba(30, 41, 59, 0.6);
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        border-radius: 12px;
+        padding: 1rem;
+        text-align: center;
+    }
+    .td-card .td-label {
+        color: #94A3B8;
+        font-size: 0.7rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        font-family: 'Fira Sans', sans-serif;
+        margin-bottom: 0.3rem;
+    }
+    .td-card .td-value {
+        font-family: 'Fira Code', monospace;
+        font-size: 1.2rem;
+        font-weight: 700;
+        color: #F8FAFC;
+    }
+    .td-card .td-value.green { color: #34D399; }
+    .td-card .td-value.red { color: #F87171; }
+    .td-card .td-value.amber { color: #FBBF24; }
+    .td-card .td-value.blue { color: #60A5FA; }
+    .td-card .td-sub {
+        font-size: 0.72rem;
+        color: #94A3B8;
+        margin-top: 0.15rem;
+        font-family: 'Fira Sans', sans-serif;
+    }
+    .td-progress-wrap {
+        background: rgba(30, 41, 59, 0.6);
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        border-radius: 12px;
+        padding: 0.8rem 1rem;
+        margin: 0.5rem 0;
+    }
+    .td-progress-label {
+        display: flex;
+        justify-content: space-between;
+        font-size: 0.75rem;
+        color: #94A3B8;
+        margin-bottom: 0.4rem;
+        font-family: 'Fira Sans', sans-serif;
+    }
+    .td-progress-bar {
+        background: rgba(255, 255, 255, 0.06);
+        border-radius: 6px;
+        height: 10px;
+        overflow: hidden;
+    }
+    .td-progress-fill {
+        height: 100%;
+        border-radius: 6px;
+        transition: width 0.3s ease;
+    }
+    .td-order-card {
+        background: rgba(30, 41, 59, 0.7);
+        border: 1px solid rgba(139, 92, 246, 0.25);
+        border-radius: 12px;
+        padding: 1rem 1.2rem;
+        margin: 0.75rem 0;
+    }
+    .td-order-card .td-order-title {
+        font-family: 'Fira Code', monospace;
+        font-size: 0.75rem;
+        font-weight: 600;
+        color: #8B5CF6;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        margin-bottom: 0.4rem;
+    }
+    .td-order-card .td-order-body {
+        font-family: 'Fira Code', monospace;
+        font-size: 0.95rem;
+        color: #F8FAFC;
+        line-height: 1.6;
+    }
+    .td-order-card .td-order-hint {
+        font-family: 'Fira Sans', sans-serif;
+        font-size: 0.75rem;
+        color: #94A3B8;
+        margin-top: 0.3rem;
+    }
+
 </style>
 """
 

@@ -745,6 +745,101 @@ class IBKRProvider(DataProvider):
             "message": f"Iron Condor placé dans TWS (2 spreads) — {parts}",
         }
 
+    def place_close_order(self, legs: list, ticker: str, qty: int,
+                          target_price: float, is_credit: bool) -> dict:
+        """
+        Place un ordre de clôture combo dans TWS avec transmit=False.
+
+        - Inverse les actions (BUY→SELL, SELL→BUY) pour fermer la position
+        - Utilise target_price comme prix limite
+        - L'ordre apparaît dans TWS pour confirmation manuelle
+
+        Args:
+            legs: liste de dicts avec 'strike', 'type' (Call/Put), 'action', 'exp'
+            ticker: symbole du sous-jacent
+            qty: nombre de contrats
+            target_price: prix limite pour le combo (50% max profit)
+            is_credit: True si la position originale était un crédit (on rachète)
+        """
+        from ib_insync import Option, LimitOrder, Contract, ComboLeg, TagValue
+
+        def _place():
+            ib = self._ib
+            exp_raw = legs[0]["exp"].replace("-", "")
+
+            # 1. Qualifier chaque contrat d'option
+            bag = Contract()
+            bag.symbol = ticker
+            bag.secType = "BAG"
+            bag.currency = "USD"
+            bag.exchange = "SMART"
+
+            combo_legs = []
+            for leg in legs:
+                right = "C" if leg["type"] == "Call" else "P"
+                opt = Option(ticker, exp_raw, leg["strike"], right, "SMART")
+                result = ib.qualifyContracts(opt)
+                if not result or result[0].conId == 0:
+                    raise ValueError(
+                        f"Impossible de qualifier {leg['type']} {leg['strike']} {leg['exp']}"
+                    )
+
+                # Inverser l'action pour fermer
+                close_action = "SELL" if leg["action"] == "BUY" else "BUY"
+
+                cl = ComboLeg()
+                cl.conId = result[0].conId
+                cl.ratio = 1
+                cl.action = close_action
+                cl.exchange = "SMART"
+                combo_legs.append(cl)
+
+            bag.comboLegs = combo_legs
+
+            # 2. Déterminer action et prix limite
+            # Crédit original → on rachète (BUY le combo)
+            # Débit original → on revend (SELL le combo)
+            order_action = "BUY" if is_credit else "SELL"
+            limit_price = round(abs(target_price), 2)
+
+            order = LimitOrder(
+                action=order_action,
+                totalQuantity=qty,
+                lmtPrice=limit_price,
+                transmit=False,
+                tif="GTC",
+            )
+            order.smartComboRoutingParams = [TagValue(tag='NonGuaranteed', value='1')]
+
+            trade = ib.placeOrder(bag, order)
+
+            # Attendre le statut
+            for _ in range(10):
+                ib.sleep(0.5)
+                status = trade.orderStatus.status
+                if status and status.lower() not in ("", "presubmitted", "pendingsubmit"):
+                    break
+
+            log_msgs = []
+            for entry in trade.log:
+                if hasattr(entry, 'message') and entry.message:
+                    log_msgs.append(entry.message)
+
+            return {
+                "order_id": trade.order.orderId,
+                "status": trade.orderStatus.status,
+                "action": order_action,
+                "qty": qty,
+                "limit_price": limit_price,
+                "logs": log_msgs,
+                "message": (
+                    f"Ordre clôture Combo placé dans TWS — "
+                    f"#{trade.order.orderId} {order_action}@${limit_price:.2f} (GTC)"
+                ),
+            }
+
+        return self._run_in_ibkr_thread(_place, timeout=30)
+
     def cancel_all_orders(self) -> list:
         """Annule tous les ordres ouverts via l'API."""
         def _cancel():

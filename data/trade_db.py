@@ -104,6 +104,14 @@ class TradeDB:
 
     # ── Read ──
 
+    def get_trade(self, trade_id: int) -> dict | None:
+        """Retourne un trade par son id, ou None s'il n'existe pas."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM trades WHERE id = ?", (trade_id,)
+            ).fetchone()
+            return dict(row) if row else None
+
     def list_trades(self) -> list[dict]:
         """Retourne tous les trades, les plus récents en premier."""
         with self._connect() as conn:
