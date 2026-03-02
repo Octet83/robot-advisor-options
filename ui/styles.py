@@ -390,20 +390,36 @@ _CSS = """
         background-color: #1E293B !important;
         border-color: rgba(255, 255, 255, 0.12) !important;
     }
-    /* +/- buttons inside number input */
-    section[data-testid="stSidebar"] button[data-testid="stNumberInputStepUp"],
-    section[data-testid="stSidebar"] button[data-testid="stNumberInputStepDown"] {
-        color: #E2E8F0 !important;
-        border-color: rgba(255, 255, 255, 0.12) !important;
+    /* +/- buttons inside number input (global) */
+    button[data-testid="stNumberInputStepUp"],
+    button[data-testid="stNumberInputStepDown"] {
+        background-color: #334155 !important;
+        color: #F8FAFC !important;
+        border-color: rgba(255, 255, 255, 0.18) !important;
     }
-    /* Secondary buttons (scanner) — dark bg with readable text */
+    button[data-testid="stNumberInputStepUp"]:hover,
+    button[data-testid="stNumberInputStepDown"]:hover {
+        background-color: #475569 !important;
+        border-color: rgba(245, 158, 11, 0.3) !important;
+    }
+    /* Secondary / default buttons — sidebar */
     section[data-testid="stSidebar"] button[kind="secondary"],
     section[data-testid="stSidebar"] .stButton button:not([kind="primary"]) {
-        background-color: #1E293B !important;
-        color: #E2E8F0 !important;
-        border: 1px solid rgba(255, 255, 255, 0.15) !important;
+        background-color: #334155 !important;
+        color: #F8FAFC !important;
+        border: 1px solid rgba(255, 255, 255, 0.2) !important;
     }
     section[data-testid="stSidebar"] .stButton button:not([kind="primary"]):hover {
+        background-color: #475569 !important;
+        border-color: rgba(245, 158, 11, 0.4) !important;
+    }
+    /* Secondary / default buttons — main area */
+    .stApp .stButton button:not([kind="primary"]) {
+        background-color: #1E293B !important;
+        color: #F8FAFC !important;
+        border: 1px solid rgba(255, 255, 255, 0.15) !important;
+    }
+    .stApp .stButton button:not([kind="primary"]):hover {
         background-color: #334155 !important;
         border-color: rgba(245, 158, 11, 0.3) !important;
     }
