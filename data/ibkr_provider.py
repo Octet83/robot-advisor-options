@@ -809,7 +809,8 @@ class IBKRProvider(DataProvider):
                 transmit=False,
                 tif="GTC",
             )
-            order.smartComboRoutingParams = [TagValue(tag='NonGuaranteed', value='1')]
+            # Pas de NonGuaranteed pour les ordres de clôture —
+            # IBKR exige le mode garanti pour fermer des positions combo
 
             trade = ib.placeOrder(bag, order)
 
