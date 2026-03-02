@@ -65,7 +65,27 @@ class HybridProvider(DataProvider):
 
     @property
     def ibkr_connected(self) -> bool:
-        """True si IBKR est actuellement connecté."""
+        """True si IBKR est actuellement connecté.
+        Tente une reconnexion lazy si IBKR est dispo mais pas connecté."""
+        if self._ibkr is not None and not self._ibkr.is_connected:
+            # TWS n'était pas dispo au démarrage, on retente
+            try:
+                import random
+                import concurrent.futures
+                # Recréer l'executor (l'ancien peut être dans un état cassé)
+                try:
+                    self._ibkr._executor.shutdown(wait=False)
+                except Exception:
+                    pass
+                self._ibkr._executor = concurrent.futures.ThreadPoolExecutor(
+                    max_workers=1, thread_name_prefix="ibkr"
+                )
+                self._ibkr._client_id = random.randint(100, 999)
+                self._ibkr.connect()
+                self._ibkr_available = True
+                logger.info("HybridProvider : IBKR reconnecté (lazy) ✅")
+            except Exception as e:
+                logger.debug("HybridProvider : reconnexion lazy échouée: %s", e)
         return self._ibkr is not None and self._ibkr.is_connected
 
     def _try_ibkr(self, method_name: str, ticker: str, *args, **kwargs):

@@ -37,10 +37,16 @@ from engine.indicators import (
     compute_iv_rank, compute_historical_vol, compute_trend_and_risk_data,
 )
 from data.hybrid_provider import HybridProvider
+from data.trade_db import TradeDB
 from ui.styles import inject_css
 
+# ── Trade journal (SQLite) ──
+_trade_db = TradeDB()
+
 # ── Data provider singleton (IBKR → yfinance fallback) ──
-@st.cache_resource
+# TTL 30s : le provider est recréé périodiquement pour détecter
+# les changements de connexion IBKR (TWS lancé/arrêté en cours de route)
+@st.cache_resource(ttl=30)
 def _init_provider():
     return HybridProvider()
 
@@ -90,6 +96,10 @@ with st.sidebar:
     else:
         _reason = "ib_insync absent" if _provider._ibkr is None else "TWS/Gateway non détecté"
         st.markdown(f"🟡 **yfinance** uniquement — {_reason}")
+        if _provider._ibkr is not None:
+            if st.button("🔄 Reconnecter IBKR", use_container_width=True):
+                _init_provider.clear()  # Vide le cache @st.cache_resource
+                st.rerun()  # Relance le script → recréation du provider
 
     st.markdown("---")
 
@@ -109,8 +119,6 @@ with st.sidebar:
 
     budget = st.number_input(
         "💰 Budget Maximum Risqué ($)",
-        min_value=50,
-        max_value=1_000_000,
         value=1000,
         step=100,
         help="Capital maximum absolu que vous êtes prêt à perdre ou bloquer en marge.",
@@ -363,6 +371,109 @@ if not analyze_btn and not _has_analysis:
 
             st.markdown("---")
 
+    # ── Journal des Trades (toujours visible) ──
+    _all_trades = _trade_db.list_trades()
+    if _all_trades:
+        st.markdown("### 📒 Journal des Trades")
+        import json as _json
+        from datetime import datetime as _dt_cls
+        import yfinance as _yf_mod
+
+        _today = _dt_cls.now().date()
+
+        # Récupérer le spot actuel pour chaque ticker unique
+        _tickers_in_journal = list({t["ticker"] for t in _all_trades})
+        _current_spots = {}
+        for _tk in _tickers_in_journal:
+            try:
+                _current_spots[_tk] = _yf_mod.Ticker(_tk).fast_info.get("lastPrice", None)
+            except Exception:
+                _current_spots[_tk] = None
+
+        _journal_html = (
+            '<style>'
+            '.tj{width:100%;border-collapse:collapse;font-size:0.82rem}'
+            '.tj th{background:#1a1a2e;color:#aaa;padding:6px 8px;text-align:left;border-bottom:2px solid #333;white-space:nowrap}'
+            '.tj td{padding:5px 8px;border-bottom:1px solid #222;white-space:nowrap}'
+            '.tj tr.row-dte{background:rgba(230,50,50,0.18)}'
+            '.tj tr:hover{background:rgba(255,255,255,0.05)}'
+            '</style>'
+            '<div style="overflow-x:auto;max-width:100%">'
+            '<table class="tj"><tr>'
+            '<th>#</th><th>Date</th><th>Ticker</th><th>Stratégie</th>'
+            '<th>Legs</th><th>Qté</th><th>Exp</th><th>DTE</th>'
+            '<th>Risque</th><th>Profit</th><th>Cr/Db</th><th>EV</th>'
+            '<th>TP</th><th>Time Stop</th><th>Spot Entrée</th><th>Spot Now</th><th>IBKR</th>'
+            '</tr>'
+        )
+
+        for _t in _all_trades:
+            _legs = _json.loads(_t.get("legs_json", "[]"))
+            _legs_str = " / ".join(f"{l['action']} {l['type']} {l['strike']}" for l in _legs)
+
+            # Calcul DTE
+            _exp_str = _t.get("expiration", "")
+            _dte = None
+            if _exp_str:
+                try:
+                    _exp_date = _dt_cls.strptime(_exp_str, "%Y-%m-%d").date()
+                    _dte = (_exp_date - _today).days
+                except ValueError:
+                    pass
+
+            _row_class = "row-dte" if _dte is not None and _dte <= 21 else ""
+
+            _cur_spot = _current_spots.get(_t["ticker"])
+            _max_risk = f"${_t['max_risk']:.0f}" if _t.get("max_risk") else "—"
+            _max_profit = f"${_t['max_profit']:.0f}" if _t.get("max_profit") else "—"
+            _cd = f"${_t['credit_debit']:.0f}" if _t.get("credit_debit") else "—"
+            _ev = f"${_t['ev']:.2f}" if _t.get("ev") else "—"
+            _tp = f"${_t['take_profit']:.0f}" if _t.get("take_profit") else "—"
+            _spot_entry = f"${_t['spot_at_entry']:.2f}" if _t.get("spot_at_entry") else "—"
+            _spot_now = f"${_cur_spot:.2f}" if _cur_spot else "—"
+            _ibkr = f"#{_t['ibkr_order_id']}" if _t.get("ibkr_order_id") else "—"
+            _dte_str = str(_dte) + "j" if _dte is not None else "—"
+            _ts = _t.get("time_stop_date", "") or "—"
+
+            _journal_html += (
+                f'<tr class="{_row_class}">'
+                f'<td>{_t["id"]}</td>'
+                f'<td>{_t["created_at"][:16].replace("T", " ")}</td>'
+                f'<td><b>{_t["ticker"]}</b></td>'
+                f'<td>{_t["strategy_name"]}</td>'
+                f'<td style="font-size:0.75rem">{_legs_str}</td>'
+                f'<td>{_t["qty"]}</td>'
+                f'<td>{_exp_str}</td>'
+                f'<td><b>{_dte_str}</b></td>'
+                f'<td>{_max_risk}</td><td>{_max_profit}</td>'
+                f'<td>{_cd}</td><td>{_ev}</td>'
+                f'<td>{_tp}</td><td>{_ts}</td>'
+                f'<td>{_spot_entry}</td><td><b>{_spot_now}</b></td><td>{_ibkr}</td>'
+                f'</tr>'
+            )
+
+        _journal_html += "</table></div>"
+        st.markdown(_journal_html, unsafe_allow_html=True)
+
+        # ── Suppression manuelle ──
+        with st.expander("🗑️ Supprimer un trade"):
+            _trade_ids = [t["id"] for t in _all_trades]
+            _del_id = st.selectbox(
+                "Sélectionnez l'ID du trade à supprimer",
+                options=_trade_ids,
+                format_func=lambda tid: next(
+                    (f"#{tid} — {t['ticker']} {t['strategy_name']} ({t['created_at'][:10]})"
+                     for t in _all_trades if t['id'] == tid),
+                    str(tid),
+                ),
+            )
+            if st.button("🗑️ Confirmer la suppression", type="secondary"):
+                _trade_db.delete_trade(_del_id)
+                st.success(f"Trade #{_del_id} supprimé.")
+                st.rerun()
+
+        st.markdown("---")
+
     # Bannière marché fermé (seulement si pas de bypass hors-séance)
     if not _can_analyze and _market_hours_msg:
         st.markdown("""\
@@ -393,6 +504,7 @@ if not analyze_btn and not _has_analysis:
     with col3:
         st.markdown("### 3️⃣ Exécutez")
         st.write("Suivez le ticket d'ordre et le plan de vol pour exécuter la stratégie recommandée.")
+
     st.stop()
 
 # ── Exécution de l'analyse ──
@@ -536,21 +648,29 @@ try:
                     _provider._ibkr._ensure_connected()
                     result = _provider._ibkr.place_order(strategy, ticker)
                     status = result.get("status", "Unknown")
-                    if status.lower() in ("cancelled", "inactive", "apicancelled"):
-                        logs_text = "\n".join(result.get("logs", [])) or "Aucun détail"
-                        st.warning(
-                            f"⚠️ Ordre #{result['order_id']} **rejeté par TWS** (statut: {status})\n\n"
-                            f"```\n{logs_text}\n```\n\n"
-                            f"Vérifiez dans TWS : permissions options US, "
-                            f"marge disponible, ou limites API."
+
+                    # Sauvegarder dans le journal
+                    try:
+                        _trade_db.save_trade(
+                            ticker=ticker, bias=bias,
+                            strategy=strategy, ibkr_result=result,
+                            spot=spot,
                         )
-                    else:
-                        st.success(
-                            f"✅ {result['message']}\n\n"
-                            f"Statut : **{status}** — "
-                            f"L'ordre est prêt dans TWS. "
-                            f"**Cliquez sur « Transmettre » dans TWS** pour l'exécuter."
-                        )
+                    except Exception as db_err:
+                        st.caption(f"⚠️ Journal : {db_err}")
+
+                    # Avec transmit=False, le statut IBKR n'est pas fiable
+                    # (Cancelled/Inactive sont normaux). L'ordre EST dans TWS.
+                    st.success(
+                        f"✅ {result['message']}\n\n"
+                        f"L'ordre est prêt dans TWS. "
+                        f"**Cliquez sur « Transmettre » dans TWS** pour l'exécuter.\n\n"
+                        f"📒 Trade enregistré dans le journal."
+                    )
+                    # Afficher les messages TWS comme info (pas comme erreur)
+                    _logs = result.get("logs", [])
+                    if _logs:
+                        st.caption("Messages TWS : " + " | ".join(_logs))
                 except Exception as e:
                     st.error(f"❌ Erreur : {e}")
 

@@ -20,46 +20,27 @@ TICKER_GROUPS = {
     "🇺🇸 Index US": {
         "SPY": "S&P 500", "QQQ": "Nasdaq 100", "IWM": "Russell 2000",
         "DIA": "Dow Jones", "VTI": "US Total Market",
-        "RSP": "S&P 500 Equal Wt", "MDY": "S&P MidCap 400", "IJR": "S&P SmallCap 600",
-    },
-    "🌍 World": {
-        "VT": "FTSE All-World", "VXUS": "International ex-US",
-    },
-    "🇪🇺 Europe": {
-        "VGK": "FTSE Europe", "FEZ": "Euro Stoxx 50",
-        "EWG": "Germany (DAX)", "EWU": "UK (FTSE 100)", "EWQ": "France (CAC 40)",
-        "EWP": "Spain (IBEX)", "EWI": "Italy (FTSE MIB)", "EWL": "Switzerland (SMI)",
-        "EWN": "Netherlands (AEX)", "EWD": "Sweden (OMX)",
-    },
-    "🌏 Asie-Pacifique": {
-        "EWJ": "Japan (Nikkei)", "EWY": "South Korea (KOSPI)",
-        "EWA": "Australia (ASX)", "EWH": "Hong Kong (HSI)",
-        "EWT": "Taiwan (TAIEX)", "EWS": "Singapore (STI)",
-        "INDA": "India (NIFTY)", "FXI": "China Large-Cap", "AAXJ": "Asia ex-Japan",
-    },
-    "🌎 Amériques (ex-US)": {
-        "EWZ": "Brazil (Bovespa)", "EWC": "Canada (TSX)", "EWW": "Mexico (IPC)",
     },
     "🌐 Émergents": {
-        "EEM": "Emerging Markets", "KWEB": "China Internet",
+        "EEM": "Emerging Markets",
     },
     "💻 Tech": {
         "AAPL": "Apple", "MSFT": "Microsoft", "AMZN": "Amazon",
         "GOOGL": "Alphabet", "META": "Meta", "NVDA": "NVIDIA", "TSLA": "Tesla",
         "AVGO": "Broadcom", "ORCL": "Oracle", "CRM": "Salesforce",
-        "ADBE": "Adobe", "CSCO": "Cisco", "ACN": "Accenture", "IBM": "IBM",
+        "ADBE": "Adobe", "CSCO": "Cisco", "IBM": "IBM",
     },
     "🔬 Semiconducteurs": {
         "AMD": "AMD", "INTC": "Intel", "MU": "Micron", "QCOM": "Qualcomm",
         "TSM": "TSMC", "MRVL": "Marvell", "ARM": "Arm Holdings", "SMCI": "Super Micro",
     },
     "🎬 Média": {
-        "NFLX": "Netflix", "DIS": "Disney", "CMCSA": "Comcast", "WBD": "Warner Bros",
+        "NFLX": "Netflix", "DIS": "Disney",
     },
     "🏦 Finance": {
         "JPM": "JPMorgan", "BAC": "Bank of America", "GS": "Goldman Sachs",
         "MS": "Morgan Stanley", "WFC": "Wells Fargo", "C": "Citigroup", "SCHW": "Schwab",
-        "V": "Visa", "MA": "Mastercard", "AXP": "Amex", "BLK": "BlackRock", "COF": "Capital One",
+        "V": "Visa", "MA": "Mastercard", "AXP": "Amex", "BLK": "BlackRock",
     },
     "⛽ Énergie": {
         "XOM": "ExxonMobil", "CVX": "Chevron", "COP": "ConocoPhillips",
@@ -69,12 +50,12 @@ TICKER_GROUPS = {
         "UNH": "UnitedHealth", "JNJ": "Johnson & Johnson", "PFE": "Pfizer",
         "ABBV": "AbbVie", "LLY": "Eli Lilly", "MRK": "Merck", "BMY": "Bristol-Myers",
         "AMGN": "Amgen", "GILD": "Gilead", "TMO": "Thermo Fisher",
-        "ABT": "Abbott", "MDT": "Medtronic", "MRNA": "Moderna",
+        "ABT": "Abbott", "MRNA": "Moderna",
     },
     "🏭 Industrie": {
         "BA": "Boeing", "CAT": "Caterpillar", "DE": "Deere & Co",
         "GE": "GE Aerospace", "HON": "Honeywell", "LMT": "Lockheed Martin",
-        "RTX": "RTX / Raytheon", "UPS": "UPS", "FDX": "FedEx", "UNP": "Union Pacific",
+        "RTX": "RTX / Raytheon", "UPS": "UPS", "FDX": "FedEx",
     },
     "🛒 Consommation": {
         "HD": "Home Depot", "WMT": "Walmart", "COST": "Costco",
@@ -86,34 +67,31 @@ TICKER_GROUPS = {
         "T": "AT&T", "VZ": "Verizon", "TMUS": "T-Mobile",
     },
     "🚗 Auto & EV": {
-        "F": "Ford", "GM": "General Motors", "LCID": "Lucid",
+        "F": "Ford", "GM": "General Motors",
     },
     "🎰 Spéculatif / High-Vol": {
         "COIN": "Coinbase", "PLTR": "Palantir", "SOFI": "SoFi", "RIVN": "Rivian",
-        "NIO": "NIO", "MARA": "Marathon Digital", "HOOD": "Robinhood",
+        "HOOD": "Robinhood",
         "SNAP": "Snap", "GME": "GameStop", "AMC": "AMC Entertainment",
-        "UBER": "Uber", "LYFT": "Lyft", "SHOP": "Shopify", "ROKU": "Roku",
-        "RBLX": "Roblox", "DKNG": "DraftKings", "ABNB": "Airbnb",
+        "UBER": "Uber", "SHOP": "Shopify", "ROKU": "Roku",
+        "DKNG": "DraftKings", "ABNB": "Airbnb",
         "PYPL": "PayPal", "SNOW": "Snowflake", "NET": "Cloudflare",
         "CRWD": "CrowdStrike", "PANW": "Palo Alto Networks", "ZS": "Zscaler",
     },
     "🪙 Matières Premières": {
-        "GLD": "Or (Gold)", "SLV": "Argent (Silver)", "PPLT": "Platine",
-        "PALL": "Palladium", "USO": "Pétrole brut (WTI)", "UNG": "Gaz naturel",
-        "CPER": "Cuivre", "COPX": "Mines de cuivre", "LIT": "Lithium",
-        "URA": "Uranium", "DBA": "Agriculture",
+        "GLD": "Or (Gold)", "SLV": "Argent (Silver)",
+        "USO": "Pétrole brut (WTI)",
     },
     "📈 Obligations": {
-        "TLT": "Treasuries 20 ans+", "HYG": "Obligations High Yield",
+        "TLT": "Treasuries 20 ans+",
     },
     "📊 Secteurs ETF": {
         "XLF": "Secteur Finance", "XLE": "Secteur Énergie", "XLK": "Secteur Tech",
         "XLV": "Secteur Santé", "XLI": "Secteur Industrie",
         "XLP": "Conso. de base", "XLY": "Conso. discrétionnaire",
-        "XLU": "Secteur Utilities", "XLRE": "Secteur Immobilier",
-        "XLC": "Secteur Communication", "SMH": "Semiconducteurs ETF",
+        "XLU": "Secteur Utilities",
+        "SMH": "Semiconducteurs ETF",
         "ARKK": "ARK Innovation", "SOXX": "Semiconducteurs (iShares)",
-        "XBI": "Biotech ETF",
     },
 }
 
@@ -132,7 +110,7 @@ for _cat, _tickers in TICKER_GROUPS.items():
 # Fallback : ^VIX si le ticker n'a pas d'indice dédié.
 VOL_INDEX_MAP = {
     # S&P 500
-    "SPY": "^VIX", "VOO": "^VIX", "IVV": "^VIX", "RSP": "^VIX",
+    "SPY": "^VIX", "VOO": "^VIX", "IVV": "^VIX",
     # Nasdaq 100
     "QQQ": "^VXN", "TQQQ": "^VXN", "SQQQ": "^VXN",
     # Dow Jones
@@ -146,14 +124,6 @@ VOL_INDEX_MAP = {
     "SLV": "^VXSLV",
     # Emerging Markets
     "EEM": "^VXEEM", "VWO": "^VXEEM", "IEMG": "^VXEEM",
-    # Brésil
-    "EWZ": "^VXEWZ",
-    # Chine
-    "FXI": "^VXFXI", "MCHI": "^VXFXI", "KWEB": "^VXFXI",
-    # Europe / EAFE
-    "VGK": "^VXEFA", "FEZ": "^VXEFA", "EWG": "^VXEFA", "EWU": "^VXEFA",
-    "EWQ": "^VXEFA", "EWP": "^VXEFA", "EWI": "^VXEFA", "EWL": "^VXEFA",
-    "EWN": "^VXEFA", "EWD": "^VXEFA", "VXUS": "^VXEFA",
     # Actions individuelles avec vol CBOE dédiée
     "AAPL": "^VXAPL",
     "AMZN": "^VXAZN",

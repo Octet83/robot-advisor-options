@@ -30,6 +30,9 @@ Thumbs.db
 # Streamlit
 .streamlit/secrets.toml
 
+# Data
+*.db
+
 # Agent / AI
 .agent/
 .gemini/

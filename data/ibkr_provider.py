@@ -589,128 +589,161 @@ class IBKRProvider(DataProvider):
 
     def place_order(self, strategy: dict, ticker: str) -> dict:
         """
-        Place l'ordre pour de vrai dans TWS (transmit=True).
-        Pour les Iron Condors (4 legs), on split en deux spreads 2-legs
-        car IBKR rejette les combos 4-legs via API.
+        Place un ou plusieurs ordres Combo (BAG) dans TWS avec transmit=False.
+
+        - 2 legs (spreads) → un seul ordre Combo via _build_combo
+        - 4 legs (Iron Condors) → 2 ordres Combo séparés (Put Spread + Call Spread)
+          car IBKR rejette les combos 4-legs avec NonGuaranteed (erreur 10043)
+
+        Tous les ordres sont préparés dans TWS mais nécessitent
+        un clic manuel pour être transmis au marché.
         """
         def _place():
-            from ib_insync import Option, LimitOrder, Contract, ComboLeg, TagValue
+            legs = strategy["legs"]
+
+            # Iron Condor (4 legs) → split en 2 ordres 2-legs
+            if len(legs) == 4:
+                put_legs = [l for l in legs if l["type"] == "Put"]
+                call_legs = [l for l in legs if l["type"] == "Call"]
+
+                if len(put_legs) == 2 and len(call_legs) == 2:
+                    return self._place_split_combo(strategy, ticker, [
+                        ("Put Spread", put_legs),
+                        ("Call Spread", call_legs),
+                    ])
+
+            # 2 legs (ou autre) → un seul ordre Combo
+            bag, order, action, qty, limit_price = self._build_combo(strategy, ticker)
+            order.transmit = False
 
             ib = self._ib
-            legs = strategy["legs"]
-            qty = strategy.get("qty", 1)
-            exp_raw = legs[0]["exp"].replace("-", "")
+            trade = ib.placeOrder(bag, order)
 
-            # 1. Qualifier tous les legs
-            qualified = []
-            for leg in legs:
+            # Attendre le statut
+            for _ in range(10):
+                ib.sleep(0.5)
+                status = trade.orderStatus.status
+                if status and status.lower() not in ("", "presubmitted", "pendingsubmit"):
+                    break
+
+            log_msgs = []
+            for entry in trade.log:
+                if hasattr(entry, 'message') and entry.message:
+                    log_msgs.append(entry.message)
+
+            n_legs = len(legs)
+            return {
+                "order_id": trade.order.orderId,
+                "status": trade.orderStatus.status,
+                "why_held": "",
+                "action": action,
+                "qty": qty,
+                "limit_price": limit_price,
+                "logs": log_msgs,
+                "message": (
+                    f"Ordre Combo {n_legs}-legs placé dans TWS — "
+                    f"#{trade.order.orderId} {action}@${limit_price:.2f}"
+                ),
+            }
+
+        return self._run_in_ibkr_thread(_place, timeout=30)
+
+    def _place_split_combo(self, strategy: dict, ticker: str,
+                           groups: list[tuple[str, list]]) -> dict:
+        """Place un Iron Condor en 2 ordres Combo 2-legs séparés."""
+        from ib_insync import Option, LimitOrder, Contract, ComboLeg, TagValue
+
+        ib = self._ib
+        qty = strategy.get("qty", 1)
+        exp_raw = strategy["legs"][0]["exp"].replace("-", "")
+
+        results = []
+        for label, group_legs in groups:
+            # Qualifier les contrats
+            bag = Contract()
+            bag.symbol = ticker
+            bag.secType = "BAG"
+            bag.currency = "USD"
+            bag.exchange = "SMART"
+
+            combo_legs = []
+            net = 0
+            for leg in group_legs:
                 right = "C" if leg["type"] == "Call" else "P"
                 opt = Option(ticker, exp_raw, leg["strike"], right, "SMART")
                 result = ib.qualifyContracts(opt)
                 if not result or result[0].conId == 0:
                     raise ValueError(f"Impossible de qualifier {leg['type']} {leg['strike']}")
-                qualified.append({
-                    "contract": result[0],
-                    "action": leg["action"],
-                    "price": leg["price"],
-                    "type": leg["type"],
-                })
 
-            # 2. Grouper par type (Put legs / Call legs)
-            put_legs = [q for q in qualified if q["type"] == "Put"]
-            call_legs = [q for q in qualified if q["type"] == "Call"]
+                cl = ComboLeg()
+                cl.conId = result[0].conId
+                cl.ratio = 1
+                cl.action = leg["action"]
+                cl.exchange = "SMART"
+                combo_legs.append(cl)
 
-            # Si 4 legs → split en deux ordres 2-legs
-            groups = []
-            if len(put_legs) == 2 and len(call_legs) == 2:
-                groups = [("Put Spread", put_legs), ("Call Spread", call_legs)]
-            else:
-                # 2 legs ou autre → un seul ordre
-                groups = [("Spread", qualified)]
-
-            results = []
-            for label, group_legs in groups:
-                bag = Contract()
-                bag.symbol = ticker
-                bag.secType = "BAG"
-                bag.currency = "USD"
-                bag.exchange = "SMART"
-
-                combo_legs = []
-                net = 0
-                for ql in group_legs:
-                    cl = ComboLeg()
-                    cl.conId = ql["contract"].conId
-                    cl.ratio = 1
-                    cl.action = ql["action"]
-                    cl.exchange = "SMART"
-                    combo_legs.append(cl)
-                    if ql["action"] == "SELL":
-                        net += ql["price"]
-                    else:
-                        net -= ql["price"]
-                bag.comboLegs = combo_legs
-
-                if net > 0:
-                    action = "SELL"
-                    limit_price = round(abs(net), 2)
+                if leg["action"] == "SELL":
+                    net += leg["price"]
                 else:
-                    action = "BUY"
-                    limit_price = round(abs(net), 2)
+                    net -= leg["price"]
 
-                order = LimitOrder(
-                    action=action,
-                    totalQuantity=qty,
-                    lmtPrice=limit_price,
-                    transmit=False,  # Ne PAS transmettre — l'utilisateur valide dans TWS
-                )
-                order.smartComboRoutingParams = [TagValue(tag='NonGuaranteed', value='1')]
+            bag.comboLegs = combo_legs
 
-                trade = ib.placeOrder(bag, order)
+            action = "SELL" if net > 0 else "BUY"
+            limit_price = round(abs(net), 2)
 
-                # Attendre le statut
-                for _ in range(10):
-                    ib.sleep(0.5)
-                    status = trade.orderStatus.status
-                    if status and status.lower() not in ("", "presubmitted", "pendingsubmit"):
-                        break
+            order = LimitOrder(
+                action=action,
+                totalQuantity=qty,
+                lmtPrice=limit_price,
+                transmit=False,
+            )
+            order.smartComboRoutingParams = [TagValue(tag='NonGuaranteed', value='1')]
 
-                log_msgs = []
-                for entry in trade.log:
-                    if hasattr(entry, 'message') and entry.message:
-                        log_msgs.append(entry.message)
+            trade = ib.placeOrder(bag, order)
 
-                results.append({
-                    "order_id": trade.order.orderId,
-                    "status": trade.orderStatus.status,
-                    "label": label,
-                    "action": action,
-                    "limit_price": limit_price,
-                    "logs": log_msgs,
-                })
+            for _ in range(10):
+                ib.sleep(0.5)
+                status = trade.orderStatus.status
+                if status and status.lower() not in ("", "presubmitted", "pendingsubmit"):
+                    break
 
-            # Combiner les résultats
-            all_ids = [r["order_id"] for r in results]
-            all_statuses = [r["status"] for r in results]
-            all_logs = []
-            for r in results:
-                all_logs.extend(r.get("logs", []))
+            log_msgs = []
+            for entry in trade.log:
+                if hasattr(entry, 'message') and entry.message:
+                    log_msgs.append(entry.message)
 
-            worst_status = "Cancelled" if "Cancelled" in all_statuses else all_statuses[0]
-            parts = " + ".join(f"#{r['order_id']} {r['label']} {r['action']}@${r['limit_price']:.2f}" for r in results)
+            results.append({
+                "order_id": trade.order.orderId,
+                "status": trade.orderStatus.status,
+                "label": label,
+                "action": action,
+                "limit_price": limit_price,
+                "logs": log_msgs,
+            })
 
-            return {
-                "order_id": all_ids[0],
-                "status": worst_status,
-                "why_held": "",
-                "action": results[0]["action"],
-                "qty": qty,
-                "limit_price": sum(r["limit_price"] for r in results),
-                "logs": all_logs,
-                "message": f"Ordre(s) placé(s) dans TWS — {parts}",
-            }
+        # Combiner les résultats
+        all_statuses = [r["status"] for r in results]
+        all_logs = []
+        for r in results:
+            all_logs.extend(r.get("logs", []))
 
-        return self._run_in_ibkr_thread(_place, timeout=30)
+        worst_status = "Cancelled" if "Cancelled" in all_statuses else all_statuses[0]
+        parts = " + ".join(
+            f"#{r['order_id']} {r['label']} {r['action']}@${r['limit_price']:.2f}"
+            for r in results
+        )
+
+        return {
+            "order_id": results[0]["order_id"],
+            "status": worst_status,
+            "why_held": "",
+            "action": results[0]["action"],
+            "qty": qty,
+            "limit_price": sum(r["limit_price"] for r in results),
+            "logs": all_logs,
+            "message": f"Iron Condor placé dans TWS (2 spreads) — {parts}",
+        }
 
     def cancel_all_orders(self) -> list:
         """Annule tous les ordres ouverts via l'API."""
